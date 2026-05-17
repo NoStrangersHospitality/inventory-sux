@@ -125,17 +125,19 @@ export default function Dashboard() {
           gap: '20px'
         }}>
           {/* FOH */}
-          <div style={{
-            background: '#fff',
-            border: '1px solid #e8e8e8',
-            borderRadius: '16px',
-            padding: '36px 28px',
-            cursor: 'pointer',
-            textAlign: 'center',
-            transition: 'border-color 0.15s'
-          }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = '#F5B800'}
-            onMouseLeave={e => e.currentTarget.style.borderColor = '#e8e8e8'}
+          <div
+            onClick={() => router.push('/foh')}
+            style={{
+              background: '#fff',
+              border: '1px solid #e8e8e8',
+              borderRadius: '16px',
+              padding: '36px 28px',
+              cursor: 'pointer',
+              textAlign: 'center',
+              transition: 'border-color 0.15s, box-shadow 0.15s'
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = '#F5B800'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(245,184,0,0.12)' }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8e8e8'; e.currentTarget.style.boxShadow = 'none' }}
           >
             <div style={{ fontSize: '40px', marginBottom: '14px' }}>🍸</div>
             <div style={{ fontSize: '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>
@@ -147,15 +149,18 @@ export default function Dashboard() {
           </div>
 
           {/* BOH */}
-          <div style={{
-            background: '#fff',
-            border: '1px solid #e8e8e8',
-            borderRadius: '16px',
-            padding: '36px 28px',
-            cursor: 'pointer',
-            textAlign: 'center',
-            opacity: profile?.boh_access ? 1 : 0.5
-          }}>
+          <div
+            onClick={() => !profile?.boh_access && null}
+            style={{
+              background: '#fff',
+              border: '1px solid #e8e8e8',
+              borderRadius: '16px',
+              padding: '36px 28px',
+              cursor: profile?.boh_access ? 'pointer' : 'default',
+              textAlign: 'center',
+              opacity: profile?.boh_access ? 1 : 0.5
+            }}
+          >
             <div style={{ fontSize: '40px', marginBottom: '14px' }}>🍳</div>
             <div style={{ fontSize: '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>
               Back of House
