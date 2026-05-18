@@ -11,6 +11,8 @@ export default function Items() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importPreview, setImportPreview] = useState(null)
   const [activeCategory, setActiveCategory] = useState('liquor')
   const [form, setForm] = useState({ name: '', category: 'liquor', bottle_size: '', case_size: '', par: '', distributor_id: '' })
   const router = useRouter()
@@ -69,9 +71,100 @@ export default function Items() {
     setSaving(false)
   }
 
+  const exportCSV = () => {
+    const catLabel = CATEGORIES.find(c => c.key === activeCategory)?.label || activeCategory
+    const rows = [['Product Name', 'Bottle Size', 'Case Size', 'Par', 'Distributor']]
+    items.filter(i => i.category === activeCategory).forEach(item => {
+      const dist = distributors.find(d => d.id === item.distributor_id)
+      rows.push([item.name, item.bottle_size || '', item.case_size || '', item.par || 0, dist?.name || ''])
+    })
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = `items_${activeCategory}.csv`
+    a.click()
+  }
+
+  const downloadTemplate = () => {
+    const catLabel = CATEGORIES.find(c => c.key === activeCategory)?.label || activeCategory
+    const examples = {
+      liquor: [['Buffalo Trace Bourbon', '750ml', '12', '6', 'Republic National'], ["Tito's Vodka", '1L', '12', '8', 'Southern Glazers']],
+      beer: [["Hamm's 24pk", '12oz', '1', '4', 'Republic National'], ['High Life 24pk', '12oz', '1', '4', 'Republic National']],
+      wine: [['Field Recordings Chenin Blanc', '750ml', '12', '3', 'Southern Glazers']],
+      misc: [['Angostura Bitters', '4oz', '12', '6', '']],
+    }
+    const rows = [['Product Name', 'Bottle Size', 'Case Size', 'Par', 'Distributor'], ...(examples[activeCategory] || [])]
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = `items_${activeCategory}_template.csv`
+    a.click()
+  }
+
+  const handleImportFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+      if (lines.length < 2) return
+      const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
+      const ni = hdr.findIndex(h => h.includes('name') || h.includes('product'))
+      const si = hdr.findIndex(h => h.includes('bottle') || h.includes('size'))
+      const ci = hdr.findIndex(h => h.includes('case'))
+      const pi = hdr.findIndex(h => h.includes('par'))
+      const di = hdr.findIndex(h => h.includes('dist'))
+      const parsed = []
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
+        const name = cols[ni >= 0 ? ni : 0] || ''
+        if (!name) continue
+        const distName = cols[di >= 0 ? di : 4] || ''
+        const dist = distributors.find(d => d.name.toLowerCase() === distName.toLowerCase())
+        parsed.push({
+          name,
+          category: activeCategory,
+          bottle_size: cols[si >= 0 ? si : 1] || '',
+          case_size: cols[ci >= 0 ? ci : 2] || '',
+          par: parseInt(cols[pi >= 0 ? pi : 3]) || 0,
+          distributor_id: dist?.id || null,
+          distName,
+          distMatched: !distName || !!dist,
+        })
+      }
+      setImportPreview(parsed)
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const confirmImport = async () => {
+    if (!importPreview) return
+    setImporting(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const existingNames = items.filter(i => i.category === activeCategory).map(i => i.name.toLowerCase())
+    const toInsert = importPreview.filter(r => !existingNames.includes(r.name.toLowerCase()))
+    if (toInsert.length > 0) {
+      await supabase.from('items').insert(toInsert.map(r => ({
+        name: r.name,
+        category: r.category,
+        bottle_size: r.bottle_size,
+        case_size: r.case_size,
+        par: r.par,
+        distributor_id: r.distributor_id,
+        user_id: session.user.id
+      })))
+      const { data } = await supabase.from('items').select('*').eq('user_id', session.user.id).order('name')
+      setItems(data || [])
+    }
+    setImportPreview(null)
+    setImporting(false)
+  }
+
   const catItems = items.filter(i => i.category === activeCategory)
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -94,9 +187,17 @@ export default function Items() {
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Items</h1>
             <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Your product catalog</p>
           </div>
-          <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-            + Add Item
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={downloadTemplate} style={outlineBtn}>↓ Template</button>
+            {catItems.length > 0 && <button onClick={exportCSV} style={outlineBtn}>↓ Export</button>}
+            <label style={{ ...outlineBtn, display: 'inline-block' }}>
+              ↑ Import
+              <input type="file" accept=".csv" onChange={handleImportFile} style={{ display: 'none' }} />
+            </label>
+            <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+              + Add Item
+            </button>
+          </div>
         </div>
 
         {/* Category tabs */}
@@ -104,7 +205,7 @@ export default function Items() {
           {CATEGORIES.map(c => {
             const count = items.filter(i => i.category === c.key).length
             return (
-              <div key={c.key} onClick={() => setActiveCategory(c.key)}
+              <div key={c.key} onClick={() => { setActiveCategory(c.key); setImportPreview(null) }}
                 style={{ background: '#fff', border: `2px solid ${activeCategory === c.key ? '#F5B800' : '#e8e8e8'}`, borderRadius: '12px', padding: '16px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s' }}>
                 <div style={{ fontSize: '28px', marginBottom: '6px' }}>{c.icon}</div>
                 <div style={{ fontSize: '14px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
@@ -113,6 +214,62 @@ export default function Items() {
             )
           })}
         </div>
+
+        {/* Import Preview */}
+        {importPreview && (
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Import Preview</div>
+                <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>
+                  {importPreview.length} items · {importPreview.filter(r => !r.distMatched && r.distName).length} unmatched distributors ·{' '}
+                  {importPreview.filter(r => !items.filter(i => i.category === activeCategory).map(i => i.name.toLowerCase()).includes(r.name.toLowerCase())).length} new
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => setImportPreview(null)} style={outlineBtn}>Cancel</button>
+                <button onClick={confirmImport} disabled={importing} style={{ background: importing ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importing ? 'not-allowed' : 'pointer' }}>
+                  {importing ? 'Importing...' : 'Confirm Import'}
+                </button>
+              </div>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <thead>
+                <tr>
+                  {['Product', 'Size', 'Case', 'Par', 'Distributor', 'Status'].map((h, i) => (
+                    <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {importPreview.map((r, i) => {
+                  const exists = items.filter(item => item.category === activeCategory).map(item => item.name.toLowerCase()).includes(r.name.toLowerCase())
+                  return (
+                    <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                      <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.case_size || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.par || 0}</td>
+                      <td style={{ padding: '7px 10px', color: r.distMatched ? '#666' : '#E24B4A' }}>{r.distName || '--'}{!r.distMatched && r.distName ? ' ⚠' : ''}</td>
+                      <td style={{ padding: '7px 10px' }}>
+                        {exists ? (
+                          <span style={{ color: '#aaa', fontSize: '11px' }}>Already exists</span>
+                        ) : (
+                          <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ Ready</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {importPreview.some(r => !r.distMatched && r.distName) && (
+              <div style={{ marginTop: '10px', fontSize: '11px', color: '#854F0B', background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '6px', padding: '8px 12px' }}>
+                ⚠ Unmatched distributors will be left blank. Add them in Distributors first if you want them linked.
+              </div>
+            )}
+          </div>
+        )}
 
         {showForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
@@ -157,11 +314,11 @@ export default function Items() {
           </div>
         )}
 
-        {catItems.length === 0 ? (
+        {catItems.length === 0 && !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
-            No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items yet. Add your first one.
+            No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items yet. Add one or import from CSV.
           </div>
-        ) : (
+        ) : !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <thead>
@@ -192,7 +349,7 @@ export default function Items() {
               </tbody>
             </table>
           </div>
-        )}
+        ) : null}
       </div>
     </div>
   )
