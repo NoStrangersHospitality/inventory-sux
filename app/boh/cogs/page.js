@@ -23,6 +23,8 @@ export default function BOHCOGS() {
   const [editingPrepIngId, setEditingPrepIngId] = useState(null)
   const [editingPrepItemId, setEditingPrepItemId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [importingIngs, setImportingIngs] = useState(false)
+  const [ingImportPreview, setIngImportPreview] = useState(null)
   const [ingForm, setIngForm] = useState({ name: '', category: '', item_type: 'dry', purchase_qty: '', purchase_unit: 'lb', purchase_cost: '', density: '', vendor: '', notes: '' })
   const [recipeForm, setRecipeForm] = useState({ name: '', menu_price: '', target_cost_pct: '0.30', yield_portions: '1' })
   const [recipeIngs, setRecipeIngs] = useState([{ ingredient_id: '', ingredient_name: '', quantity: '', unit: 'g' }])
@@ -138,7 +140,6 @@ export default function BOHCOGS() {
     return total + recipeIngCost(ing, parseFloat(ri.quantity), ri.unit)
   }, 0)
 
-  // Prep unit conversion
   const convertToBase = (qty, fromUnit) => {
     const weightToG = { g: 1, oz_w: 28.3495, lb: 453.592 }
     const volumeToMl = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588, oz: 29.5735, fl_oz: 29.5735, pt: 473.176, qt: 946.353 }
@@ -207,6 +208,7 @@ export default function BOHCOGS() {
 
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
 
   const saveIngForm = async () => {
     if (!ingForm.name || !ingForm.purchase_qty || !ingForm.purchase_cost) return
@@ -221,6 +223,99 @@ export default function BOHCOGS() {
     await loadData(session.user.id)
     setShowIngForm(false)
     setSaving(false)
+  }
+
+  const exportIngredients = () => {
+    const rows = [['Name', 'Category', 'Type', 'Purchase Qty', 'Purchase Unit', 'Purchase Cost ($)', 'Density (g/ml)', 'Vendor', 'Notes']]
+    ingredients.forEach(i => rows.push([i.name, i.category || '', i.item_type || 'dry', i.purchase_qty, i.purchase_unit, i.purchase_cost, i.density || '', i.vendor || '', i.notes || '']))
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'boh_ingredients.csv'
+    a.click()
+  }
+
+  const downloadIngsTemplate = () => {
+    const rows = [
+      ['Name', 'Category', 'Type', 'Purchase Qty', 'Purchase Unit', 'Purchase Cost ($)', 'Density (g/ml)', 'Vendor', 'Notes'],
+      ['Smoked Paprika', 'Dry Spices', 'dry', '1', 'lb', '8.99', '', 'Sysco', ''],
+      ['Heavy Cream', 'Dairy', 'liquid', '1', 'L', '4.50', '1.01', 'US Foods', ''],
+      ['Chicken Breast', 'Proteins', 'dry', '1', 'lb', '3.99', '', 'Sysco', 'boneless skinless'],
+    ]
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'boh_ingredients_template.csv'
+    a.click()
+  }
+
+  const handleIngsImport = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+      if (lines.length < 2) return
+      const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
+      const ni = hdr.findIndex(h => h.includes('name'))
+      const cati = hdr.findIndex(h => h.includes('cat'))
+      const ti = hdr.findIndex(h => h.includes('type'))
+      const pqi = hdr.findIndex(h => h.includes('qty') || h.includes('quantity'))
+      const pui = hdr.findIndex(h => h.includes('unit'))
+      const pci = hdr.findIndex(h => h.includes('cost'))
+      const di = hdr.findIndex(h => h.includes('density'))
+      const vi = hdr.findIndex(h => h.includes('vendor'))
+      const noi = hdr.findIndex(h => h.includes('note'))
+      const parsed = []
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
+        const name = cols[ni >= 0 ? ni : 0] || ''
+        if (!name) continue
+        const item_type = (cols[ti >= 0 ? ti : 2] || 'dry').toLowerCase().includes('liquid') ? 'liquid' : 'dry'
+        const purchase_qty = parseFloat(cols[pqi >= 0 ? pqi : 3]) || 0
+        const purchase_cost = parseFloat(cols[pci >= 0 ? pci : 5]) || 0
+        parsed.push({
+          name,
+          category: cols[cati >= 0 ? cati : 1] || '',
+          item_type,
+          purchase_qty,
+          purchase_unit: cols[pui >= 0 ? pui : 4] || (item_type === 'dry' ? 'lb' : 'L'),
+          purchase_cost,
+          density: parseFloat(cols[di >= 0 ? di : 6]) || null,
+          vendor: cols[vi >= 0 ? vi : 7] || '',
+          notes: cols[noi >= 0 ? noi : 8] || '',
+          valid: purchase_qty > 0 && purchase_cost > 0
+        })
+      }
+      setIngImportPreview(parsed)
+    }
+    reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const confirmIngsImport = async () => {
+    if (!ingImportPreview) return
+    setImportingIngs(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const existingNames = ingredients.map(i => i.name.toLowerCase())
+    const toInsert = ingImportPreview.filter(r => r.valid && !existingNames.includes(r.name.toLowerCase()))
+    if (toInsert.length > 0) {
+      await supabase.from('ingredients').insert(toInsert.map(r => ({
+        name: r.name,
+        category: r.category,
+        item_type: r.item_type,
+        purchase_qty: r.purchase_qty,
+        purchase_unit: r.purchase_unit,
+        purchase_cost: r.purchase_cost,
+        density: r.density,
+        vendor: r.vendor,
+        notes: r.notes,
+        user_id: session.user.id
+      })))
+      await loadData(session.user.id)
+    }
+    setIngImportPreview(null)
+    setImportingIngs(false)
   }
 
   const saveRecipeForm = async () => {
@@ -355,11 +450,65 @@ export default function BOHCOGS() {
                 <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Ingredients Database</h1>
                 <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Purchase costs and unit conversions</p>
               </div>
-              <button onClick={() => { setIngForm({ name: '', category: '', item_type: 'dry', purchase_qty: '', purchase_unit: 'lb', purchase_cost: '', density: '', vendor: '', notes: '' }); setEditingIngId(null); setShowIngForm(true) }}
-                style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-                + Add Ingredient
-              </button>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button onClick={downloadIngsTemplate} style={outlineBtn}>↓ Template</button>
+                {ingredients.length > 0 && <button onClick={exportIngredients} style={outlineBtn}>↓ Export</button>}
+                <label style={{ ...outlineBtn, display: 'inline-block' }}>
+                  ↑ Import
+                  <input type="file" accept=".csv" onChange={handleIngsImport} style={{ display: 'none' }} />
+                </label>
+                <button onClick={() => { setIngForm({ name: '', category: '', item_type: 'dry', purchase_qty: '', purchase_unit: 'lb', purchase_cost: '', density: '', vendor: '', notes: '' }); setEditingIngId(null); setShowIngForm(true) }}
+                  style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+                  + Add Ingredient
+                </button>
+              </div>
             </div>
+
+            {/* Import Preview */}
+            {ingImportPreview && (
+              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <div>
+                    <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Import Preview</div>
+                    <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>
+                      {ingImportPreview.filter(r => r.valid).length} valid · {ingImportPreview.filter(r => !r.valid).length} invalid · {ingImportPreview.filter(r => r.valid && !ingredients.map(i => i.name.toLowerCase()).includes(r.name.toLowerCase())).length} new
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => setIngImportPreview(null)} style={outlineBtn}>Cancel</button>
+                    <button onClick={confirmIngsImport} disabled={importingIngs} style={{ background: importingIngs ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importingIngs ? 'not-allowed' : 'pointer' }}>
+                      {importingIngs ? 'Importing...' : 'Confirm Import'}
+                    </button>
+                  </div>
+                </div>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr>{['Name', 'Category', 'Type', 'Purchase', 'Cost', 'Vendor', 'Status'].map((h, i) => <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {ingImportPreview.map((r, i) => {
+                      const exists = ingredients.map(ing => ing.name.toLowerCase()).includes(r.name.toLowerCase())
+                      return (
+                        <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                          <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
+                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.category || '--'}</td>
+                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.item_type}</td>
+                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.purchase_qty} {r.purchase_unit}</td>
+                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.purchase_cost ? fmt(r.purchase_cost) : '--'}</td>
+                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.vendor || '--'}</td>
+                          <td style={{ padding: '7px 10px' }}>
+                            {!r.valid ? <span style={{ color: '#E24B4A', fontSize: '11px' }}>Missing qty/cost</span>
+                              : exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Already exists</span>
+                              : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ Ready</span>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
             {showIngForm && (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
                 <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingIngId ? 'Edit Ingredient' : 'Add Ingredient'}</h3>
@@ -391,7 +540,7 @@ export default function BOHCOGS() {
               </div>
             )}
             {ingredients.length === 0 ? (
-              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>No ingredients yet.</div>
+              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>No ingredients yet. Add one or import from CSV.</div>
             ) : (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
