@@ -37,8 +37,6 @@ export default function Admin() {
     setProfiles(data || [])
   }
 
-  const fmt = (n) => '$' + Number(n || 0).toFixed(0)
-
   const mrr = (p) => {
     if (p.subscription_status !== 'active') return 0
     if (p.subscription_tier === 'both') return 25
@@ -72,6 +70,8 @@ export default function Admin() {
       subscription_tier: p.subscription_tier || 'foh',
       boh_access: p.boh_access || false,
       is_admin: p.is_admin || false,
+      comp_type: p.comp_type || 'indefinite',
+      comp_expires_at: p.comp_expires_at ? p.comp_expires_at.split('T')[0] : '',
     })
     setConfirmChange(null)
   }
@@ -98,12 +98,17 @@ export default function Admin() {
 
   const applyDrawerSave = async () => {
     setSaving(true)
-    await supabase.from('profiles').update({
+    const payload = {
       subscription_status: drawerForm.subscription_status,
       subscription_tier: drawerForm.subscription_tier,
       boh_access: drawerForm.boh_access,
       is_admin: drawerForm.is_admin,
-    }).eq('id', drawer.id)
+      comp_type: drawerForm.subscription_status === 'comp' ? drawerForm.comp_type : null,
+      comp_expires_at: drawerForm.subscription_status === 'comp' && drawerForm.comp_type === 'fixed' && drawerForm.comp_expires_at
+        ? new Date(drawerForm.comp_expires_at).toISOString()
+        : null,
+    }
+    await supabase.from('profiles').update(payload).eq('id', drawer.id)
     await loadProfiles()
     setConfirmChange(null)
     closeDrawer()
@@ -175,7 +180,7 @@ export default function Admin() {
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
             <thead>
               <tr>
-                {['Subscriber', 'Email', 'Status', 'Plan', 'BOH', 'Since', 'MRR', ''].map((h, i) => (
+                {['Subscriber', 'Location', 'Status', 'Plan', 'BOH', 'Since', 'MRR', ''].map((h, i) => (
                   <th key={i} style={{ textAlign: 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 16px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                 ))}
               </tr>
@@ -196,9 +201,19 @@ export default function Admin() {
                     </td>
                     <td style={{ padding: '12px 16px', color: '#888', fontSize: '12px' }}>{p.city && p.state ? p.city + ', ' + p.state : '--'}</td>
                     <td style={{ padding: '12px 16px' }}>
-                      <span style={{ background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, borderRadius: '6px', fontSize: '12px', fontWeight: '600', padding: '3px 10px' }}>
-                        {(p.subscription_status || 'trial').charAt(0).toUpperCase() + (p.subscription_status || 'trial').slice(1)}
-                      </span>
+                      <div>
+                        <span style={{ background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, borderRadius: '6px', fontSize: '12px', fontWeight: '600', padding: '3px 10px' }}>
+                          {(p.subscription_status || 'trial').charAt(0).toUpperCase() + (p.subscription_status || 'trial').slice(1)}
+                        </span>
+                        {p.subscription_status === 'comp' && p.comp_expires_at && (
+                          <div style={{ fontSize: '10px', color: '#854F0B', marginTop: '3px' }}>
+                            Expires {new Date(p.comp_expires_at).toLocaleDateString()}
+                          </div>
+                        )}
+                        {p.subscription_status === 'comp' && !p.comp_expires_at && (
+                          <div style={{ fontSize: '10px', color: '#aaa', marginTop: '3px' }}>Indefinite</div>
+                        )}
+                      </div>
                     </td>
                     <td style={{ padding: '12px 16px', fontSize: '12px', color: '#555' }}>{p.subscription_tier === 'both' ? 'FOH + BOH' : 'FOH'}</td>
                     <td style={{ padding: '12px 16px' }}>
@@ -241,7 +256,8 @@ export default function Admin() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '16px' }}>
               <div>
                 <label style={labelStyle}>Account Status</label>
-                <select style={inputStyle} value={drawerForm.subscription_status} onChange={e => setDrawerForm(f => ({ ...f, subscription_status: e.target.value }))}>
+                <select style={inputStyle} value={drawerForm.subscription_status}
+                  onChange={e => setDrawerForm(f => ({ ...f, subscription_status: e.target.value, comp_type: 'indefinite', comp_expires_at: '' }))}>
                   <option value="trial">Trial</option>
                   <option value="active">Active</option>
                   <option value="cancelled">Cancelled</option>
@@ -256,6 +272,34 @@ export default function Admin() {
                 </select>
               </div>
             </div>
+
+            {/* Comp duration — only shows when status is comp */}
+            {drawerForm.subscription_status === 'comp' && (
+              <div style={{ background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
+                <div style={{ fontSize: '12px', fontWeight: '600', color: '#854F0B', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Comp Duration</div>
+                <div style={{ display: 'flex', gap: '10px', marginBottom: drawerForm.comp_type === 'fixed' ? '12px' : '0' }}>
+                  {['indefinite', 'fixed'].map(type => (
+                    <button key={type} onClick={() => setDrawerForm(f => ({ ...f, comp_type: type, comp_expires_at: '' }))}
+                      style={{ flex: 1, padding: '9px', borderRadius: '8px', border: '1px solid', borderColor: drawerForm.comp_type === type ? '#854F0B' : '#f0c080', background: drawerForm.comp_type === type ? '#854F0B' : '#fff', color: drawerForm.comp_type === type ? '#fff' : '#854F0B', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+                      {type === 'indefinite' ? 'Indefinite' : 'Fixed Duration'}
+                    </button>
+                  ))}
+                </div>
+                {drawerForm.comp_type === 'fixed' && (
+                  <div style={{ marginTop: '12px' }}>
+                    <label style={{ ...labelStyle, color: '#854F0B' }}>Comp Expires On</label>
+                    <input type="date" style={{ ...inputStyle, borderColor: '#f0c080' }}
+                      value={drawerForm.comp_expires_at}
+                      onChange={e => setDrawerForm(f => ({ ...f, comp_expires_at: e.target.value }))} />
+                    {drawerForm.comp_expires_at && (
+                      <div style={{ fontSize: '11px', color: '#854F0B', marginTop: '6px' }}>
+                        Account converts to Active billing on {new Date(drawerForm.comp_expires_at).toLocaleDateString()}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '12px 14px' }}>
