@@ -13,6 +13,8 @@ export default function PourCost() {
   const [filter, setFilter] = useState('All')
   const [form, setForm] = useState({ name: '', category: '', bottle_size_oz: '', bottle_cost: '' })
   const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importPreview, setImportPreview] = useState(null)
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -80,6 +82,78 @@ export default function PourCost() {
     setSaving(false)
   }
 
+  const exportCSV = () => {
+    const rows = [['Bottle Name', 'Category', 'Bottle Size (oz)', 'Bottle Cost ($)']]
+    bottles.forEach(b => rows.push([b.name, b.category || '', b.bottle_size_oz, b.bottle_cost]))
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'pour_cost_bottles.csv'
+    a.click()
+  }
+
+  const downloadTemplate = () => {
+    const rows = [
+      ['Bottle Name', 'Category', 'Bottle Size (oz)', 'Bottle Cost ($)'],
+      ['Buffalo Trace Bourbon', 'Bourbon', '25.36', '35.10'],
+      ['Hendricks Gin', 'Gin', '25.36', '38.00'],
+      ["Tito's Vodka", 'Vodka', '33.81', '29.99'],
+    ]
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    a.download = 'pour_cost_template.csv'
+    a.click()
+  }
+
+  const handleImportFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+      if (lines.length < 2) return
+      const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
+      const ni = hdr.findIndex(h => h.includes('name') || h.includes('bottle'))
+      const ci = hdr.findIndex(h => h.includes('cat'))
+      const si = hdr.findIndex(h => h.includes('size') && !h.includes('cost'))
+      const coi = hdr.findIndex(h => h.includes('cost'))
+      const parsed = []
+      for (let i = 1; i < lines.length; i++) {
+        const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
+        const name = cols[ni >= 0 ? ni : 0] || ''
+        if (!name) continue
+        const bottle_size_oz = parseFloat(cols[si >= 0 ? si : 2]) || 0
+        const bottle_cost = parseFloat(cols[coi >= 0 ? coi : 3]) || 0
+        parsed.push({ name, category: cols[ci >= 0 ? ci : 1] || '', bottle_size_oz, bottle_cost, valid: bottle_size_oz > 0 && bottle_cost > 0 })
+      }
+      setImportPreview(parsed)
+    }
+    reader.readAsText(file)
+  }
+
+  const confirmImport = async () => {
+    if (!importPreview) return
+    setImporting(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const valid = importPreview.filter(r => r.valid)
+    const existingNames = bottles.map(b => b.name.toLowerCase())
+    const toInsert = valid.filter(r => !existingNames.includes(r.name.toLowerCase()))
+    if (toInsert.length > 0) {
+      await supabase.from('pour_cost_bottles').insert(toInsert.map(r => ({
+       name: r.name,
+       category: r.category,
+       bottle_size_oz: r.bottle_size_oz,
+       bottle_cost: r.bottle_cost,
+       user_id: session.user.id
+      })))
+      const { data } = await supabase.from('pour_cost_bottles').select('*').eq('user_id', session.user.id).order('name')
+      setBottles(data || [])
+    }
+    setImportPreview(null)
+    setImporting(false)
+  }
+
   const deleteBottle = async (id) => {
     if (!confirm('Delete this bottle?')) return
     await supabase.from('pour_cost_bottles').delete().eq('id', id)
@@ -88,6 +162,7 @@ export default function PourCost() {
 
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
 
   if (loading) return <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' }}><div style={{ color: '#aaa' }}>Loading...</div></div>
 
@@ -110,10 +185,67 @@ export default function PourCost() {
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Pour Cost Calculator</h1>
             <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Target sell prices at 20%, 25%, 30%, and 35% COG</p>
           </div>
-          <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-            + Add Bottle
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button onClick={downloadTemplate} style={outlineBtn}>↓ Template</button>
+            {bottles.length > 0 && <button onClick={exportCSV} style={outlineBtn}>↓ Export</button>}
+            <label style={{ ...outlineBtn, display: 'inline-block' }}>
+              ↑ Import
+              <input type="file" accept=".csv" onChange={handleImportFile} style={{ display: 'none' }} />
+            </label>
+            <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
+              + Add Bottle
+            </button>
+          </div>
         </div>
+
+        {/* Import Preview */}
+        {importPreview && (
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Import Preview</div>
+                <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>
+                  {importPreview.filter(r => r.valid).length} valid · {importPreview.filter(r => !r.valid).length} invalid ·{' '}
+                  {importPreview.filter(r => r.valid && !bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase())).length} new
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => setImportPreview(null)} style={outlineBtn}>Cancel</button>
+                <button onClick={confirmImport} disabled={importing} style={{ background: importing ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importing ? 'not-allowed' : 'pointer' }}>
+                  {importing ? 'Importing...' : 'Confirm Import'}
+                </button>
+              </div>
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+              <thead>
+                <tr>
+                  {['Bottle', 'Category', 'Size (oz)', 'Cost', 'Status'].map((h, i) => (
+                    <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {importPreview.map((r, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                    <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
+                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.category || '--'}</td>
+                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size_oz || '--'}</td>
+                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_cost ? fmt(r.bottle_cost) : '--'}</td>
+                    <td style={{ padding: '7px 10px' }}>
+                      {!r.valid ? (
+                        <span style={{ color: '#E24B4A', fontSize: '11px' }}>Missing size/cost</span>
+                      ) : bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase()) ? (
+                        <span style={{ color: '#aaa', fontSize: '11px' }}>Already exists</span>
+                      ) : (
+                        <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ Ready</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
         {/* Stats */}
         {bottles.length > 0 && (
@@ -137,8 +269,6 @@ export default function PourCost() {
         {showForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Bottle' : 'Add Bottle'}</h3>
-
-            {/* Size shortcuts */}
             <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
               <div style={{ fontSize: '12px', color: '#185FA5', fontWeight: '600', marginBottom: '8px' }}>Bottle Size Reference — click to auto-fill</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: '6px' }}>
@@ -151,7 +281,6 @@ export default function PourCost() {
                 ))}
               </div>
             </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={labelStyle}>Bottle Name</label>
@@ -172,8 +301,6 @@ export default function PourCost() {
                 <label style={labelStyle}>Bottle Cost ($)</label>
                 <input style={inputStyle} type="number" step="0.01" placeholder="35.00" value={form.bottle_cost} onChange={e => setForm(f => ({ ...f, bottle_cost: e.target.value }))} />
               </div>
-
-              {/* Live preview */}
               {form.bottle_size_oz > 0 && form.bottle_cost > 0 && (
                 <div style={{ gridColumn: '1/-1', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '10px' }}>
                   {[
@@ -190,7 +317,6 @@ export default function PourCost() {
                 </div>
               )}
             </div>
-
             <div style={{ display: 'flex', gap: '10px' }}>
               <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={saveBottle} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
@@ -213,7 +339,7 @@ export default function PourCost() {
         {/* Table */}
         {bottles.length === 0 ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
-            No bottles yet. Add your first bottle to get started.
+            No bottles yet. Add your first bottle or import from CSV.
           </div>
         ) : (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
