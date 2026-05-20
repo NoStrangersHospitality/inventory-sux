@@ -36,7 +36,7 @@ export default function FOH() {
     { title: 'Ordering', desc: 'Items, distributors, and purchase orders', icon: '🛒', href: '/foh/ordering', active: true },
     { title: 'Pour Cost', desc: 'Bottle cost, price targets, and COG %', icon: '🧮', href: '/foh/pour-cost', active: true },
     { title: 'COGS', desc: 'Recipe costing and margin analysis', icon: '🧾', href: '/foh/cogs', active: true },
-    { title: 'Inventory', desc: 'Count, track, and manage par levels', icon: '📦', href: null, active: false },
+    { title: 'Inventory', desc: 'On hand, counts, and receiving', icon: '📦', href: '/foh/inventory', active: true },
   ]
 
   return (
