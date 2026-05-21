@@ -14,7 +14,11 @@ export default function Items() {
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState(null)
   const [activeCategory, setActiveCategory] = useState('liquor')
-  const [form, setForm] = useState({ name: '', category: 'liquor', bottle_size: '', case_size: '', par: '', distributor_id: '' })
+  const [form, setForm] = useState({
+    name: '', category: 'liquor', item_type: 'bottle',
+    unit: 'bottle', unit_cost: '', par: '',
+    distributor_id: '', notes: '', on_hand: ''
+  })
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -29,27 +33,57 @@ export default function Items() {
     { key: 'misc', label: 'Misc', icon: '📦' },
   ]
 
+  const ITEM_TYPES = {
+    liquor: ['bottle', 'case'],
+    beer: ['keg', 'can', 'bottle', 'case'],
+    wine: ['bottle', 'case'],
+    misc: ['bottle', 'unit', 'case'],
+  }
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      const [{ data: itemData }, { data: distData }] = await Promise.all([
-        supabase.from('items').select('*').eq('user_id', session.user.id).order('name'),
-        supabase.from('distributors').select('*').eq('user_id', session.user.id).order('name')
-      ])
-      setItems(itemData || [])
-      setDistributors(distData || [])
+      await loadData(session.user.id)
       setLoading(false)
     }
     init()
   }, [])
 
+  const loadData = async (userId) => {
+    const [{ data: invItems }, { data: dists }] = await Promise.all([
+      supabase.from('inventory_items')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('area', 'foh')
+        .eq('on_menu', true)
+        .order('name'),
+      supabase.from('distributors').select('*').eq('user_id', userId).order('name')
+    ])
+    setItems(invItems || [])
+    setDistributors(dists || [])
+  }
+
   const openForm = (item = null) => {
     if (item) {
-      setForm({ name: item.name, category: item.category, bottle_size: item.bottle_size || '', case_size: item.case_size || '', par: item.par || '', distributor_id: item.distributor_id || '' })
+      setForm({
+        name: item.name, category: item.category,
+        item_type: item.item_type || 'bottle',
+        unit: item.unit || 'bottle',
+        unit_cost: item.unit_cost || '',
+        par: item.par || '',
+        distributor_id: item.distributor_id || '',
+        notes: item.notes || '',
+        on_hand: item.on_hand || ''
+      })
       setEditingId(item.id)
     } else {
-      setForm({ name: '', category: activeCategory, bottle_size: '', case_size: '', par: '', distributor_id: '' })
+      setForm({
+        name: '', category: activeCategory,
+        item_type: ITEM_TYPES[activeCategory][0],
+        unit: 'bottle', unit_cost: '', par: '',
+        distributor_id: '', notes: '', on_hand: ''
+      })
       setEditingId(null)
     }
     setShowForm(true)
@@ -59,45 +93,55 @@ export default function Items() {
     if (!form.name) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-    const payload = { name: form.name, category: form.category, bottle_size: form.bottle_size, case_size: form.case_size, par: parseInt(form.par) || 0, distributor_id: form.distributor_id || null, user_id: session.user.id }
-    if (editingId) {
-      await supabase.from('items').update(payload).eq('id', editingId)
-    } else {
-      await supabase.from('items').insert(payload)
+    const payload = {
+      name: form.name,
+      category: form.category,
+      item_type: form.item_type,
+      unit: form.unit,
+      unit_cost: parseFloat(form.unit_cost) || 0,
+      par: parseFloat(form.par) || 0,
+      distributor_id: form.distributor_id || null,
+      notes: form.notes,
+      on_hand: parseFloat(form.on_hand) || 0,
+      on_menu: true,
+      area: 'foh',
+      user_id: session.user.id
     }
-    const { data } = await supabase.from('items').select('*').eq('user_id', session.user.id).order('name')
-    setItems(data || [])
+    if (editingId) {
+      await supabase.from('inventory_items').update(payload).eq('id', editingId)
+    } else {
+      await supabase.from('inventory_items').insert(payload)
+    }
+    await loadData(session.user.id)
     setShowForm(false)
     setSaving(false)
   }
 
   const exportCSV = () => {
-    const catLabel = CATEGORIES.find(c => c.key === activeCategory)?.label || activeCategory
-    const rows = [['Product Name', 'Bottle Size', 'Case Size', 'Par', 'Distributor']]
+    const rows = [['Product Name', 'Type', 'Unit', 'Unit Cost', 'Par', 'On Hand', 'Distributor', 'Notes']]
     items.filter(i => i.category === activeCategory).forEach(item => {
       const dist = distributors.find(d => d.id === item.distributor_id)
-      rows.push([item.name, item.bottle_size || '', item.case_size || '', item.par || 0, dist?.name || ''])
+      rows.push([item.name, item.item_type || '', item.unit || '', item.unit_cost || 0, item.par || 0, item.on_hand || 0, dist?.name || '', item.notes || ''])
     })
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    a.download = `items_${activeCategory}.csv`
+    a.download = `ordering_items_${activeCategory}.csv`
     a.click()
   }
 
   const downloadTemplate = () => {
-    const catLabel = CATEGORIES.find(c => c.key === activeCategory)?.label || activeCategory
     const examples = {
-      liquor: [['Buffalo Trace Bourbon', '750ml', '12', '6', 'Republic National'], ["Tito's Vodka", '1L', '12', '8', 'Southern Glazers']],
-      beer: [["Hamm's 24pk", '12oz', '1', '4', 'Republic National'], ['High Life 24pk', '12oz', '1', '4', 'Republic National']],
-      wine: [['Field Recordings Chenin Blanc', '750ml', '12', '3', 'Southern Glazers']],
-      misc: [['Angostura Bitters', '4oz', '12', '6', '']],
+      liquor: [['Buffalo Trace Bourbon', 'bottle', 'bottle', '35.10', '6', '0', 'Republic National', '750ml / 12 case'], ["Tito's Vodka", 'bottle', 'bottle', '29.99', '8', '0', 'Southern Glazers', '1L / 12 case']],
+      beer: [["Hamm's 24pk", 'can', 'case', '18.00', '4', '0', 'Republic National', ''], ['High Life Keg', 'keg', 'keg', '85.00', '1', '0', 'Republic National', '']],
+      wine: [['Field Recordings Chenin Blanc', 'bottle', 'bottle', '14.00', '3', '0', 'Southern Glazers', '750ml / 12 case']],
+      misc: [['Angostura Bitters', 'bottle', 'bottle', '8.99', '6', '0', '', '4oz']],
     }
-    const rows = [['Product Name', 'Bottle Size', 'Case Size', 'Par', 'Distributor'], ...(examples[activeCategory] || [])]
+    const rows = [['Product Name', 'Type', 'Unit', 'Unit Cost', 'Par', 'On Hand', 'Distributor', 'Notes'], ...(examples[activeCategory] || [])]
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
-    a.download = `items_${activeCategory}_template.csv`
+    a.download = `ordering_items_${activeCategory}_template.csv`
     a.click()
   }
 
@@ -110,26 +154,32 @@ export default function Items() {
       if (lines.length < 2) return
       const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
       const ni = hdr.findIndex(h => h.includes('name') || h.includes('product'))
-      const si = hdr.findIndex(h => h.includes('bottle') || h.includes('size'))
-      const ci = hdr.findIndex(h => h.includes('case'))
+      const ti = hdr.findIndex(h => h.includes('type'))
+      const ui = hdr.findIndex(h => h === 'unit')
+      const uci = hdr.findIndex(h => h.includes('cost'))
       const pi = hdr.findIndex(h => h.includes('par'))
+      const ohi = hdr.findIndex(h => h.includes('on hand') || h.includes('onhand'))
       const di = hdr.findIndex(h => h.includes('dist'))
+      const noi = hdr.findIndex(h => h.includes('note'))
       const parsed = []
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
         const name = cols[ni >= 0 ? ni : 0] || ''
         if (!name) continue
-        const distName = cols[di >= 0 ? di : 4] || ''
+        const distName = cols[di >= 0 ? di : 6] || ''
         const dist = distributors.find(d => d.name.toLowerCase() === distName.toLowerCase())
         parsed.push({
           name,
           category: activeCategory,
-          bottle_size: cols[si >= 0 ? si : 1] || '',
-          case_size: cols[ci >= 0 ? ci : 2] || '',
-          par: parseInt(cols[pi >= 0 ? pi : 3]) || 0,
+          item_type: cols[ti >= 0 ? ti : 1] || ITEM_TYPES[activeCategory][0],
+          unit: cols[ui >= 0 ? ui : 2] || 'bottle',
+          unit_cost: parseFloat(cols[uci >= 0 ? uci : 3]) || 0,
+          par: parseFloat(cols[pi >= 0 ? pi : 4]) || 0,
+          on_hand: parseFloat(cols[ohi >= 0 ? ohi : 5]) || 0,
           distributor_id: dist?.id || null,
           distName,
           distMatched: !distName || !!dist,
+          notes: cols[noi >= 0 ? noi : 7] || '',
         })
       }
       setImportPreview(parsed)
@@ -145,17 +195,14 @@ export default function Items() {
     const existingNames = items.filter(i => i.category === activeCategory).map(i => i.name.toLowerCase())
     const toInsert = importPreview.filter(r => !existingNames.includes(r.name.toLowerCase()))
     if (toInsert.length > 0) {
-      await supabase.from('items').insert(toInsert.map(r => ({
-        name: r.name,
-        category: r.category,
-        bottle_size: r.bottle_size,
-        case_size: r.case_size,
-        par: r.par,
-        distributor_id: r.distributor_id,
+      await supabase.from('inventory_items').insert(toInsert.map(r => ({
+        name: r.name, category: r.category, item_type: r.item_type,
+        unit: r.unit, unit_cost: r.unit_cost, par: r.par,
+        on_hand: r.on_hand, distributor_id: r.distributor_id,
+        notes: r.notes, on_menu: true, area: 'foh',
         user_id: session.user.id
       })))
-      const { data } = await supabase.from('items').select('*').eq('user_id', session.user.id).order('name')
-      setItems(data || [])
+      await loadData(session.user.id)
     }
     setImportPreview(null)
     setImporting(false)
@@ -185,7 +232,7 @@ export default function Items() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
           <div>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Items</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Your product catalog</p>
+            <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Items marked On Menu in your inventory database</p>
           </div>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
             <button onClick={downloadTemplate} style={outlineBtn}>↓ Template</button>
@@ -198,6 +245,11 @@ export default function Items() {
               + Add Item
             </button>
           </div>
+        </div>
+
+        {/* Info banner */}
+        <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#185FA5' }}>
+          💡 Items appear here when marked <strong>On Menu</strong> in the Inventory Database. Adding an item here also adds it to your inventory.
         </div>
 
         {/* Category tabs */}
@@ -236,7 +288,7 @@ export default function Items() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
                 <tr>
-                  {['Product', 'Size', 'Case', 'Par', 'Distributor', 'Status'].map((h, i) => (
+                  {['Product', 'Type', 'Unit Cost', 'Par', 'Distributor', 'Status'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                   ))}
                 </tr>
@@ -247,8 +299,8 @@ export default function Items() {
                   return (
                     <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
                       <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
-                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size || '--'}</td>
-                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.case_size || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.item_type || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>${r.unit_cost || '0.00'}</td>
                       <td style={{ padding: '7px 10px', color: '#666' }}>{r.par || 0}</td>
                       <td style={{ padding: '7px 10px', color: r.distMatched ? '#666' : '#E24B4A' }}>{r.distName || '--'}{!r.distMatched && r.distName ? ' ⚠' : ''}</td>
                       <td style={{ padding: '7px 10px' }}>
@@ -271,6 +323,7 @@ export default function Items() {
           </div>
         )}
 
+        {/* Form */}
         {showForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Item' : 'Add Item'}</h3>
@@ -281,21 +334,31 @@ export default function Items() {
               </div>
               <div>
                 <label style={labelStyle}>Category</label>
-                <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+                <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
                   {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
                 </select>
               </div>
               <div>
-                <label style={labelStyle}>Bottle Size</label>
-                <input style={inputStyle} placeholder="750ml" value={form.bottle_size} onChange={e => setForm(f => ({ ...f, bottle_size: e.target.value }))} />
+                <label style={labelStyle}>Item Type</label>
+                <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
+                  {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                </select>
               </div>
               <div>
-                <label style={labelStyle}>Case Size</label>
-                <input style={inputStyle} placeholder="12" value={form.case_size} onChange={e => setForm(f => ({ ...f, case_size: e.target.value }))} />
+                <label style={labelStyle}>Unit</label>
+                <input style={inputStyle} placeholder="bottle, keg, case..." value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+              </div>
+              <div>
+                <label style={labelStyle}>Unit Cost ($)</label>
+                <input style={inputStyle} type="number" step="0.01" placeholder="0.00" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
               </div>
               <div>
                 <label style={labelStyle}>Par</label>
-                <input style={inputStyle} type="number" placeholder="6" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+                <input style={inputStyle} type="number" step="0.1" placeholder="6" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+              </div>
+              <div>
+                <label style={labelStyle}>On Hand</label>
+                <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
               </div>
               <div>
                 <label style={labelStyle}>Distributor</label>
@@ -303,6 +366,10 @@ export default function Items() {
                   <option value="">-- Select --</option>
                   {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
+              </div>
+              <div style={{ gridColumn: '1/-1' }}>
+                <label style={labelStyle}>Notes <span style={{ color: '#aaa', fontSize: '10px', fontWeight: 400 }}>bottle size, case size, etc.</span></label>
+                <input style={inputStyle} placeholder="750ml / 12 case" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
@@ -314,16 +381,21 @@ export default function Items() {
           </div>
         )}
 
+        {/* Table */}
         {catItems.length === 0 && !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
-            No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items yet. Add one or import from CSV.
+            No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items on menu yet.{' '}
+            <span style={{ color: '#F5B800', cursor: 'pointer' }} onClick={() => router.push('/foh/inventory/database')}>
+              Mark items On Menu in the Inventory Database
+            </span>{' '}
+            or add one here.
           </div>
         ) : !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
               <thead>
                 <tr>
-                  {['Product Name', 'Bottle Size', 'Case Size', 'Par', 'Distributor', ''].map((h, i) => (
+                  {['Product Name', 'Type', 'Unit Cost', 'On Hand', 'Par', 'Distributor', ''].map((h, i) => (
                     <th key={i} style={{ textAlign: 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                   ))}
                 </tr>
@@ -331,11 +403,18 @@ export default function Items() {
               <tbody>
                 {catItems.map(item => {
                   const dist = distributors.find(d => d.id === item.distributor_id)
+                  const isLow = item.par > 0 && item.on_hand < item.par
                   return (
                     <tr key={item.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
-                      <td style={{ padding: '12px 14px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{item.name}</td>
-                      <td style={{ padding: '12px 14px', color: '#555', fontSize: '13px' }}>{item.bottle_size || '--'}</td>
-                      <td style={{ padding: '12px 14px', color: '#555', fontSize: '13px' }}>{item.case_size || '--'}</td>
+                      <td style={{ padding: '12px 14px', fontWeight: '500', color: '#000', fontSize: '13px' }}>
+                        {item.name}
+                        {item.notes && <div style={{ fontSize: '11px', color: '#aaa', marginTop: '1px' }}>{item.notes}</div>}
+                      </td>
+                      <td style={{ padding: '12px 14px', fontSize: '13px' }}>
+                        <span style={{ background: '#f5f5f3', color: '#555', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{item.item_type}</span>
+                      </td>
+                      <td style={{ padding: '12px 14px', color: '#555', fontSize: '13px' }}>${Number(item.unit_cost).toFixed(2)}</td>
+                      <td style={{ padding: '12px 14px', fontSize: '13px', fontWeight: '600', color: isLow ? '#E24B4A' : '#000' }}>{Number(item.on_hand).toFixed(1)}</td>
                       <td style={{ padding: '12px 14px', color: '#555', fontSize: '13px' }}>{item.par || 0}</td>
                       <td style={{ padding: '12px 14px' }}>
                         {dist && <span style={{ background: '#fffbe6', color: '#a07800', border: '1px solid #f0d060', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{dist.name}</span>}
