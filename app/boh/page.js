@@ -29,7 +29,7 @@ export default function BOH() {
   const modules = [
     { title: 'Ordering', desc: 'Ingredients, vendors, and purchase orders', icon: '🛒', href: '/boh/ordering' },
     { title: 'COGS', desc: 'Ingredient costing and recipe margins', icon: '🧾', href: '/boh/cogs' },
-    { title: 'Inventory', desc: 'Count, track, and manage par levels', icon: '📦', href: null, coming: true },
+    { title: 'Inventory', desc: 'On hand, counts, and receiving', icon: '📦', href: '/boh/inventory' },
   ]
 
   if (loading) return (
