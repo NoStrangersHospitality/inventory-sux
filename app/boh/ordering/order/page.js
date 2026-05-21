@@ -9,7 +9,7 @@ export default function BOHOrder() {
   const [vendors, setVendors] = useState([])
   const [loading, setLoading] = useState(true)
   const [step, setStep] = useState('select')
-  const [selectedCats, setSelectedCats] = useState(new Set(['proteins', 'produce', 'dairy', 'dry_goods', 'dry_spices', 'beverages', 'other']))
+  const [selectedCats, setSelectedCats] = useState(new Set(['proteins', 'produce', 'dairy', 'dry_goods', 'dry_spices', 'oils_fats', 'sauces', 'misc']))
   const [orderRows, setOrderRows] = useState({})
   const [recapRows, setRecapRows] = useState({})
   const [submitting, setSubmitting] = useState(false)
@@ -24,18 +24,13 @@ export default function BOHOrder() {
   const CATEGORIES = [
     { key: 'proteins', label: 'Proteins', icon: '🥩' },
     { key: 'produce', label: 'Produce', icon: '🥦' },
-    { key: 'dairy', label: 'Dairy', icon: '🧈' },
+    { key: 'dairy', label: 'Dairy', icon: '🧀' },
     { key: 'dry_goods', label: 'Dry Goods', icon: '🌾' },
-    { key: 'dry_spices', label: 'Dry Spices', icon: '🫙' },
-    { key: 'beverages', label: 'Beverages', icon: '🧃' },
-    { key: 'other', label: 'Other', icon: '📦' },
+    { key: 'dry_spices', label: 'Dry Spices', icon: '🧂' },
+    { key: 'oils_fats', label: 'Oils & Fats', icon: '🫙' },
+    { key: 'sauces', label: 'Sauces', icon: '🥫' },
+    { key: 'misc', label: 'Misc', icon: '📦' },
   ]
-
-  const UNIT_LABELS = {
-    g: 'g', oz_w: 'oz', lb: 'lb',
-    ml: 'ml', fl_oz: 'fl oz', tsp: 'tsp',
-    tbsp: 'tbsp', cup: 'cup', pt: 'pt', qt: 'qt', L: 'L'
-  }
 
   useEffect(() => {
     const init = async () => {
@@ -44,7 +39,12 @@ export default function BOHOrder() {
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.boh_access) { router.push('/dashboard'); return }
       const [{ data: itemData }, { data: vendorData }] = await Promise.all([
-        supabase.from('boh_items').select('*').eq('user_id', session.user.id).order('name'),
+        supabase.from('inventory_items')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .eq('area', 'boh')
+          .eq('on_menu', true)
+          .order('name'),
         supabase.from('vendors').select('*').eq('user_id', session.user.id).order('name')
       ])
       setItems(itemData || [])
@@ -73,10 +73,16 @@ export default function BOHOrder() {
 
     const byVendor = {}
     allItems.forEach(item => {
-      const vendor = vendors.find(v => v.id === item.vendor_id)
+      const vendor = vendors.find(v => v.id === item.distributor_id)
       const key = vendor ? vendor.name : 'Unassigned'
       if (!byVendor[key]) byVendor[key] = []
-      byVendor[key].push({ ...item, vendorName: key, vendorObj: vendor, onHand: 0, suggested: Math.max(0, item.par || 0) })
+      byVendor[key].push({
+        ...item,
+        vendorName: key,
+        vendorObj: vendor,
+        on_hand_count: 0,
+        suggested: Math.max(0, Math.ceil(item.par || 0))
+      })
     })
     setOrderRows(byVendor)
     setStep('sheet')
@@ -87,10 +93,10 @@ export default function BOHOrder() {
       const next = { ...prev }
       const rows = [...next[vendorName]]
       rows[idx] = { ...rows[idx], [field]: val }
-      if (field === 'onHand' || field === 'par') {
-        const row = rows[idx]
-        rows[idx].suggested = Math.max(0, (field === 'par' ? val : row.par || 0) - (field === 'onHand' ? val : row.onHand || 0))
-      }
+      const row = rows[idx]
+      const par = field === 'par' ? val : (row.par || 0)
+      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
       next[vendorName] = rows
       return next
     })
@@ -100,7 +106,11 @@ export default function BOHOrder() {
     const rd = {}
     Object.keys(orderRows).forEach(vn => {
       const needed = orderRows[vn].filter(r => r.suggested > 0)
-      if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested }))
+      if (needed.length) rd[vn] = needed.map(r => ({
+        ...r,
+        overrideQty: r.suggested,
+        finalQty: r.suggested
+      }))
     })
     if (!Object.keys(rd).length) { alert('No items need ordering.'); return }
     setRecapRows(rd)
@@ -132,8 +142,13 @@ export default function BOHOrder() {
         lines.push({
           order_id: order.id,
           user_id: session.user.id,
+          item_id: row.id,
           item_name: row.name,
+          distributor_id: row.distributor_id || null,
           distributor_name: vn,
+          par: row.par || 0,
+          shelf_count: row.on_hand_count || 0,
+          well_count: 0,
           suggested_qty: row.suggested,
           final_qty: row.finalQty
         })
@@ -182,16 +197,16 @@ export default function BOHOrder() {
           <>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Build BOH Order</h1>
             <p style={{ color: '#999', fontSize: '13px', marginBottom: '24px' }}>Select which categories to include.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '12px', marginBottom: '24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px', marginBottom: '24px' }}>
               {CATEGORIES.map(c => {
                 const count = items.filter(i => i.category === c.key).length
                 const selected = selectedCats.has(c.key)
                 return (
                   <div key={c.key} onClick={() => toggleCat(c.key)}
-                    style={{ background: '#fff', border: `2px solid ${selected ? '#F5B800' : '#e8e8e8'}`, borderRadius: '12px', padding: '16px 8px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s' }}>
+                    style={{ background: '#fff', border: `2px solid ${selected ? '#F5B800' : '#e8e8e8'}`, borderRadius: '12px', padding: '16px 8px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s', boxShadow: selected ? '0 2px 12px rgba(245,184,0,.12)' : 'none' }}>
                     <div style={{ fontSize: '28px', marginBottom: '6px' }}>{c.icon}</div>
                     <div style={{ fontSize: '12px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
-                    <div style={{ fontSize: '11px', color: '#aaa' }}>{count}</div>
+                    <div style={{ fontSize: '11px', color: '#aaa' }}>{count} item{count !== 1 ? 's' : ''}</div>
                   </div>
                 )
               })}
@@ -206,8 +221,8 @@ export default function BOHOrder() {
         {step === 'sheet' && (
           <>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>BOH Order Sheet</h1>
-            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '20px', fontSize: '12px', color: '#a07800', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              ⚠️ <span><strong>Par notice:</strong> Editing par here permanently updates that item's par level.</span>
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '20px', fontSize: '12px', color: '#a07800' }}>
+              💡 On Hand defaults to zero. Enter what you actually have on hand right now — suggested qty will calculate automatically.
             </div>
             {Object.keys(orderRows).map(vn => {
               const vendor = vendors.find(v => v.name === vn)
@@ -222,7 +237,7 @@ export default function BOHOrder() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
-                          {['Item', 'Category', 'Unit', 'Par', 'On Hand', 'Suggest'].map((h, i) => (
+                          {['Item', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}
                         </tr>
@@ -230,18 +245,21 @@ export default function BOHOrder() {
                       <tbody>
                         {orderRows[vn].map((row, ri) => (
                           <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '8px 10px', fontWeight: '500', color: '#000', fontSize: '12px' }}>{row.name}</td>
+                            <td style={{ padding: '8px 10px', fontSize: '12px' }}>
+                              <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
+                              {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
+                            </td>
                             <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
-                            <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{UNIT_LABELS[row.purchase_unit] || row.purchase_unit}</td>
+                            <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                               <input type="number" min="0" step="0.01" defaultValue={row.par || 0}
                                 onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                 style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                             </td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                              <input type="number" min="0" step="0.01" defaultValue={0}
-                                onChange={e => updateRow(vn, ri, 'onHand', parseFloat(e.target.value) || 0)}
-                                style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                              <input type="number" min="0" step="0.01" value={row.on_hand_count}
+                                onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                style={{ width: '60px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                             </td>
                             <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                           </tr>
@@ -277,7 +295,7 @@ export default function BOHOrder() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
-                          {['Item', 'Unit', 'Suggested', 'Order Qty', 'Final'].map((h, i) => (
+                          {['Item', 'Unit', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Final'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}
                         </tr>
@@ -285,8 +303,13 @@ export default function BOHOrder() {
                       <tbody>
                         {recapRows[vn].map((row, ri) => (
                           <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '10px 12px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{row.name}</td>
-                            <td style={{ padding: '10px 12px', color: '#888', fontSize: '12px' }}>{UNIT_LABELS[row.purchase_unit] || row.purchase_unit}</td>
+                            <td style={{ padding: '10px 12px', fontSize: '13px' }}>
+                              <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
+                              {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
+                            </td>
+                            <td style={{ padding: '10px 12px', color: '#888', fontSize: '12px', textAlign: 'center' }}>{row.unit || '--'}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(2)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                             <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                               <input type="number" min="0" step="0.01" value={row.overrideQty}
