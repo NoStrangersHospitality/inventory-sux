@@ -33,7 +33,12 @@ export default function Order() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const [{ data: itemData }, { data: distData }] = await Promise.all([
-        supabase.from('items').select('*').eq('user_id', session.user.id).order('name'),
+        supabase.from('inventory_items')
+          .select('*')
+          .eq('user_id', session.user.id)
+          .eq('area', 'foh')
+          .eq('on_menu', true)
+          .order('name'),
         supabase.from('distributors').select('*').eq('user_id', session.user.id).order('name')
       ])
       setItems(itemData || [])
@@ -65,7 +70,14 @@ export default function Order() {
       const dist = distributors.find(d => d.id === item.distributor_id)
       const key = dist ? dist.name : 'Unassigned'
       if (!byDist[key]) byDist[key] = []
-      byDist[key].push({ ...item, distName: key, distObj: dist, shelf: 0, well: 0, total: 0, suggested: Math.max(0, item.par || 0) })
+      byDist[key].push({
+        ...item,
+        distName: key,
+        distObj: dist,
+        on_hand_count: 0,
+        total: 0,
+        suggested: Math.max(0, Math.ceil(item.par || 0))
+      })
     })
     setOrderRows(byDist)
     setStep('sheet')
@@ -77,11 +89,9 @@ export default function Order() {
       const rows = [...next[distName]]
       rows[idx] = { ...rows[idx], [field]: val }
       const row = rows[idx]
-      if (field === 'shelf' || field === 'well') {
-        const total = (field === 'shelf' ? val : row.shelf) + (field === 'well' ? val : row.well)
-        rows[idx].total = total
-        rows[idx].suggested = Math.max(0, (row.par || 0) - total)
-      }
+      const par = field === 'par' ? val : (row.par || 0)
+      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
       next[distName] = rows
       return next
     })
@@ -91,7 +101,12 @@ export default function Order() {
     const rd = {}
     Object.keys(orderRows).forEach(dn => {
       const needed = orderRows[dn].filter(r => r.suggested > 0)
-      if (needed.length) rd[dn] = needed.map(r => ({ ...r, overrideQty: r.suggested, fullCase: false, finalQty: r.suggested }))
+      if (needed.length) rd[dn] = needed.map(r => ({
+        ...r,
+        overrideQty: r.suggested,
+        fullCase: false,
+        finalQty: r.suggested
+      }))
     })
     if (!Object.keys(rd).length) { alert('No items need ordering.'); return }
     setRecapRows(rd)
@@ -142,8 +157,8 @@ export default function Order() {
           distributor_id: row.distributor_id || null,
           distributor_name: dn,
           par: row.par || 0,
-          shelf_count: row.shelf || 0,
-          well_count: row.well || 0,
+          shelf_count: row.on_hand_count || 0,
+          well_count: 0,
           suggested_qty: row.suggested,
           final_qty: row.finalQty
         })
@@ -226,8 +241,8 @@ export default function Order() {
         {step === 'sheet' && (
           <>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Sheet</h1>
-            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '20px', fontSize: '12px', color: '#a07800', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              ⚠️ <span><strong>Par notice:</strong> Editing par here permanently updates that item's par level.</span>
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '20px', fontSize: '12px', color: '#a07800' }}>
+              💡 On Hand defaults to zero. Enter what you actually have on hand right now — suggested qty will calculate automatically.
             </div>
             {Object.keys(orderRows).map(dn => {
               const dist = distributors.find(d => d.name === dn)
@@ -242,7 +257,7 @@ export default function Order() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
-                          {['Product', 'Category', 'Size', 'Par', 'Shelf', 'Well', 'Total', 'Suggest'].map((h, i) => (
+                          {['Product', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}
                         </tr>
@@ -250,25 +265,22 @@ export default function Order() {
                       <tbody>
                         {orderRows[dn].map((row, ri) => (
                           <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '8px 10px', fontWeight: '500', color: '#000', fontSize: '12px' }}>{row.name}</td>
+                            <td style={{ padding: '8px 10px', fontSize: '12px' }}>
+                              <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
+                              {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
+                            </td>
                             <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
-                            <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.bottle_size || '--'}</td>
+                            <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                               <input type="number" min="0" defaultValue={row.par || 0}
-                                onChange={e => updateRow(dn, ri, 'par', parseInt(e.target.value) || 0)}
+                                onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
                                 style={{ width: '52px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                             </td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                              <input type="number" min="0" defaultValue={0}
-                                onChange={e => updateRow(dn, ri, 'shelf', parseInt(e.target.value) || 0)}
-                                style={{ width: '52px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                              <input type="number" min="0" step="0.1" value={row.on_hand_count}
+                                onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                             </td>
-                            <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                              <input type="number" min="0" defaultValue={0}
-                                onChange={e => updateRow(dn, ri, 'well', parseInt(e.target.value) || 0)}
-                                style={{ width: '52px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
-                            </td>
-                            <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '500', color: '#000', fontSize: '12px' }}>{row.total}</td>
                             <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                           </tr>
                         ))}
@@ -303,7 +315,7 @@ export default function Order() {
                     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
-                          {['Product', 'Size', 'Suggested', 'Order Qty', 'Full Case', 'Final Qty'].map((h, i) => (
+                          {['Product', 'Unit', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Final Qty'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}
                         </tr>
@@ -311,18 +323,18 @@ export default function Order() {
                       <tbody>
                         {recapRows[dn].map((row, ri) => (
                           <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '10px 12px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{row.name}</td>
-                            <td style={{ padding: '10px 12px', color: '#888', fontSize: '12px' }}>{row.bottle_size || '--'}</td>
+                            <td style={{ padding: '10px 12px', fontSize: '13px' }}>
+                              <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
+                              {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
+                            </td>
+                            <td style={{ padding: '10px 12px', color: '#888', fontSize: '12px', textAlign: 'center' }}>{row.unit || '--'}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(1)}</td>
+                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                             <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                               <input type="number" min="0" value={row.overrideQty}
-                                onChange={e => updateRecapQty(dn, ri, parseInt(e.target.value) || 0)}
+                                onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
                                 style={{ width: '64px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
-                            </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center' }}>
-                              <input type="checkbox" checked={row.fullCase}
-                                onChange={e => toggleFullCase(dn, ri, e.target.checked)}
-                                style={{ width: '16px', height: '16px', accentColor: '#F5B800', cursor: 'pointer' }} />
                             </td>
                             <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '600', color: '#3B6D11', fontSize: '13px' }}>{row.finalQty}</td>
                           </tr>
