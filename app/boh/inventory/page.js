@@ -75,7 +75,7 @@ export default function BOHInventory() {
         )}
 
         {/* Tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '20px' }}>
           <div onClick={() => router.push('/boh/inventory/database')}
             style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '36px 28px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s' }}
             onMouseEnter={e => e.currentTarget.style.borderColor = '#F5B800'}
@@ -98,6 +98,15 @@ export default function BOHInventory() {
                 ? <span style={{ color: '#E24B4A', fontWeight: '500' }}>{stats.lowStock} items below par</span>
                 : 'All items at or above par'}
             </div>
+          </div>
+          <div onClick={() => router.push('/boh/inventory/invoices')}
+            style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '36px 28px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s' }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = '#F5B800'}
+            onMouseLeave={e => e.currentTarget.style.borderColor = '#e8e8e8'}>
+            <div style={{ fontSize: '40px', marginBottom: '14px' }}>📄</div>
+            <div style={{ fontSize: '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Invoices</div>
+            <div style={{ fontSize: '13px', color: '#aaa', marginBottom: '16px' }}>Scan vendor invoices to update on hand.</div>
+            <div style={{ fontSize: '12px', color: '#aaa' }}>Photo or PDF · AI powered</div>
           </div>
         </div>
       </div>
