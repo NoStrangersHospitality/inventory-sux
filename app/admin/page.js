@@ -136,7 +136,10 @@ export default function Admin() {
           <div style={{ background: 'rgba(245,184,0,.15)', border: '1px solid rgba(245,184,0,.3)', color: '#F5B800', fontSize: '10px', fontWeight: '700', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '3px 10px', borderRadius: '20px' }}>Admin</div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button onClick={() => router.push('/dashboard')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← App</button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+  <button onClick={() => router.push('/admin/tickets')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>🎫 Tickets</button>
+  <button onClick={() => router.push('/dashboard')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← App</button>
+</div>
           <button onClick={async () => { await supabase.auth.signOut(); router.push('/auth/login') }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
       </div>

@@ -8,6 +8,7 @@ export default function Dashboard() {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [menuOpen, setMenuOpen] = useState(false)
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -23,6 +24,7 @@ export default function Dashboard() {
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       setProfile(profile)
       setLoading(false)
+      
     }
     getUser()
   }, [])
@@ -45,15 +47,54 @@ export default function Dashboard() {
           <span style={{ color: '#F5B800' }}>Sux</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{profile?.first_name} {profile?.last_name}</div>
-            <div style={{ fontSize: '11px', color: '#999' }}>{profile?.bar_name}</div>
-          </div>
-          <button onClick={async () => { await supabase.auth.signOut(); router.push('/auth/login') }}
-            style={{ background: '#333', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '12px', cursor: 'pointer' }}>
-            Log Out
-          </button>
+  <div style={{ textAlign: 'right' }}>
+    <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{profile?.first_name} {profile?.last_name}</div>
+    <div style={{ fontSize: '11px', color: '#999' }}>{profile?.bar_name}</div>
+  </div>
+  <div style={{ position: 'relative' }}>
+    <button
+      onClick={() => setMenuOpen(o => !o)}
+      style={{ background: '#333', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '12px', cursor: 'pointer' }}>
+      Account ▾
+    </button>
+    {menuOpen && (
+      <div style={{ position: 'absolute', right: 0, top: '36px', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', minWidth: '180px', zIndex: 100, overflow: 'hidden' }}>
+        <div onClick={() => { setMenuOpen(false); router.push('/account') }}
+          style={{ padding: '11px 16px', fontSize: '13px', color: '#000', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+          onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+          👤 Account Settings
         </div>
+        <div onClick={() => { setMenuOpen(false); router.push('/support') }}
+          style={{ padding: '11px 16px', fontSize: '13px', color: '#000', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+          onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+          🎫 Support
+        </div>
+        <div onClick={() => { setMenuOpen(false); router.push('/help') }}
+          style={{ padding: '11px 16px', fontSize: '13px', color: '#000', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+          onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+          📖 Help Center
+        </div>
+        {profile?.is_admin && (
+          <div onClick={() => { setMenuOpen(false); router.push('/admin') }}
+            style={{ padding: '11px 16px', fontSize: '13px', color: '#000', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+            onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+            ⚙️ Admin
+          </div>
+        )}
+        <div onClick={async () => { setMenuOpen(false); await supabase.auth.signOut(); router.push('/auth/login') }}
+          style={{ padding: '11px 16px', fontSize: '13px', color: '#E24B4A', cursor: 'pointer' }}
+          onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
+          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+          Log Out
+        </div>
+      </div>
+    )}
+  </div>
+</div>
       </div>
 
       {/* Body */}
@@ -92,6 +133,10 @@ export default function Dashboard() {
 
         </div>
       </div>
+      {menuOpen && (
+        <div onClick={() => setMenuOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
+      )}
     </div>
   )
 }
