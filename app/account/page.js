@@ -233,13 +233,38 @@ export default function Account() {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}
-              onClick={() => alert('Billing management coming soon — Stripe integration in progress.')}>
+              onClick={async () => {
+                const { data: { session } } = await supabase.auth.getSession()
+                const res = await fetch('/api/stripe/portal', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ userId: session.user.id })
+                })
+                const data = await res.json()
+                if (data.url) window.location.href = data.url
+                else alert('No billing account found. Please contact support.')
+              }}>
               Manage Billing
             </button>
             {!profile?.boh_access && (
               <button
                 style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}
-                onClick={() => alert('BOH upgrade coming soon — Stripe integration in progress.')}>
+                onClick={async () => {
+                  const { data: { session } } = await supabase.auth.getSession()
+                  const res = await fetch('/api/stripe/create-checkout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BOH_ADDON,
+                      userId: session.user.id,
+                      email: session.user.email,
+                      plan: 'boh_addon'
+                    })
+                  })
+                  const data = await res.json()
+                  if (data.url) window.location.href = data.url
+                  else alert('Error starting checkout. Please try again.')
+                }}>
                 Add BOH for $10/mo
               </button>
             )}

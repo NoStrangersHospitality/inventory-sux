@@ -103,6 +103,102 @@ export default function Dashboard() {
           <h1 style={{ fontSize: '22px', fontWeight: '500', color: '#000' }}>Good to see you, {profile?.first_name}.</h1>
           <p style={{ color: '#999', fontSize: '14px', marginTop: '4px' }}>What are we working on today?</p>
         </div>
+        {/* Trial banner */}
+{(profile?.subscription_status === 'trial' || !profile?.subscription_status) && !profile?.stripe_customer_id && (
+  <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div>
+      <div style={{ fontSize: '14px', fontWeight: '600', color: '#fff', marginBottom: '3px' }}>
+        🎉 Your 14-day free trial is active
+      </div>
+      <div style={{ fontSize: '12px', color: '#aaa' }}>
+        Add a payment method to continue after your trial ends. No charge for 14 days.
+      </div>
+    </div>
+    <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '16px' }}>
+      <button onClick={async () => {
+        const { data: { session } } = await supabase.auth.getSession()
+        const res = await fetch('/api/stripe/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH,
+            userId: session.user.id,
+            email: session.user.email,
+            plan: 'foh'
+          })
+        })
+        const data = await res.json()
+        if (data.url) window.location.href = data.url
+      }} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        FOH — $29/mo
+      </button>
+      <button onClick={async () => {
+        const { data: { session } } = await supabase.auth.getSession()
+        const res = await fetch('/api/stripe/create-checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BUNDLE,
+            userId: session.user.id,
+            email: session.user.email,
+            plan: 'bundle'
+          })
+        })
+        const data = await res.json()
+        if (data.url) window.location.href = data.url
+      }} style={{ background: '#fff', color: '#000', border: '1px solid #444', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+        Bundle — $39/mo
+      </button>
+    </div>
+  </div>
+)}
+
+{/* Past due banner */}
+{profile?.subscription_status === 'past_due' && (
+  <div style={{ background: '#fff5f5', border: '1px solid #fca5a5', borderRadius: '12px', padding: '14px 18px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div style={{ fontSize: '13px', color: '#c53030' }}>
+      ⚠ Your payment failed. Please update your billing information to keep access.
+    </div>
+    <button onClick={async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/stripe/portal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: session.user.id })
+      })
+      const data = await res.json()
+      if (data.url) window.location.href = data.url
+    }} style={{ background: '#E24B4A', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>
+      Update Billing
+    </button>
+  </div>
+)}
+
+{/* Cancelled banner */}
+{profile?.subscription_status === 'cancelled' && (
+  <div style={{ background: '#f5f5f3', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 18px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div style={{ fontSize: '13px', color: '#555' }}>
+      Your subscription has been cancelled. Reactivate to restore full access.
+    </div>
+    <button onClick={async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/stripe/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH,
+          userId: session.user.id,
+          email: session.user.email,
+          plan: 'foh'
+        })
+      })
+      const data = await res.json()
+      if (data.url) window.location.href = data.url
+    }} style={{ background: '#333', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>
+      Reactivate
+    </button>
+  </div>
+)}
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
 
