@@ -40,6 +40,8 @@ export default function FOHInventoryDatabase() {
     misc: ['bottle', 'unit', 'case'],
   }
 
+  const VALID_TYPES = ['bottle', 'keg', 'can', 'case', 'weight', 'volume', 'unit']
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -60,7 +62,6 @@ export default function FOHInventoryDatabase() {
   }
 
   const fmt = (n) => '$' + Number(n).toFixed(2)
-
   const catItems = items.filter(i => i.category === activeCategory)
   const totalValue = catItems.reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
 
@@ -70,14 +71,14 @@ export default function FOHInventoryDatabase() {
         name: item.name, category: item.category, item_type: item.item_type || 'bottle',
         on_hand: item.on_hand, unit: item.unit || '', unit_cost: item.unit_cost,
         par: item.par, on_menu: item.on_menu || false,
-        distributor_id: item.distributor_id || '', notes: item.notes || ''
+        distributor_id: item.distributor_id || '', notes: item.notes || '', wine_type: item.wine_type || ''
       })
       setEditingId(item.id)
     } else {
       setForm({
         name: '', category: activeCategory, item_type: ITEM_TYPES[activeCategory][0],
         on_hand: '', unit: '', unit_cost: '', par: '',
-        on_menu: false, distributor_id: '', notes: ''
+        on_menu: false, distributor_id: '', notes: '', wine_type: ''
       })
       setEditingId(null)
     }
@@ -93,15 +94,10 @@ export default function FOHInventoryDatabase() {
       on_hand: parseFloat(form.on_hand) || 0, unit: form.unit,
       unit_cost: parseFloat(form.unit_cost) || 0, par: parseFloat(form.par) || 0,
       on_menu: form.on_menu, distributor_id: form.distributor_id || null,
-      notes: form.notes, area: 'foh', user_id: session.user.id
+      notes: form.notes, wine_type: form.wine_type || null, area: 'foh', user_id: session.user.id
     }
     if (editingId) {
       await supabase.from('inventory_items').update(payload).eq('id', editingId)
-    } else {
-      await supabase.from('inventory_items').insert(payload)
-    }
-    // Log to history if on_hand changed
-    if (editingId) {
       const original = items.find(i => i.id === editingId)
       if (original && parseFloat(form.on_hand) !== original.on_hand) {
         await supabase.from('inventory_history').insert({
@@ -118,6 +114,8 @@ export default function FOHInventoryDatabase() {
           total_value_at_time: parseFloat(form.on_hand) * (parseFloat(form.unit_cost) || 0)
         })
       }
+    } else {
+      await supabase.from('inventory_items').insert(payload)
     }
     await loadData(session.user.id)
     setShowForm(false)
@@ -157,7 +155,10 @@ export default function FOHInventoryDatabase() {
     if (!file) return
     const reader = new FileReader()
     reader.onload = (ev) => {
-      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l)
+      const lines = ev.target.result
+        .split(/\r?\n/)
+        .map(l => l.trim())
+        .filter(l => l && l.replace(/,/g, '').trim())
       if (lines.length < 2) return
       const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
       const ni = hdr.findIndex(h => h.includes('name'))
@@ -172,8 +173,8 @@ export default function FOHInventoryDatabase() {
       const parsed = []
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
-        const name = cols[ni >= 0 ? ni : 0] || ''
-        if (!name) continue
+        const name = (cols[ni >= 0 ? ni : 0] || '').trim()
+        if (!name || name.toLowerCase() === 'name' || name.toLowerCase() === 'product name') continue
         const distName = cols[di >= 0 ? di : 8] || ''
         const dist = distributors.find(d => d.name.toLowerCase() === distName.toLowerCase())
         parsed.push({
@@ -202,26 +203,64 @@ export default function FOHInventoryDatabase() {
     setImporting(true)
     const { data: { session } } = await supabase.auth.getSession()
     const existingNames = catItems.map(i => i.name.toLowerCase())
-    const toInsert = importPreview.filter(r => !existingNames.includes(r.name.toLowerCase()))
+    const toInsert = importPreview.filter(r =>
+      r.name &&
+      r.name.trim() &&
+      !existingNames.includes(r.name.toLowerCase().trim())
+    )
+
     if (toInsert.length > 0) {
-      await supabase.from('inventory_items').insert(toInsert.map(r => ({
-        name: r.name, category: r.category, item_type: r.item_type,
-        on_hand: r.on_hand, unit: r.unit, unit_cost: r.unit_cost,
-        par: r.par, on_menu: r.on_menu, distributor_id: r.distributor_id,
-        notes: r.notes, area: 'foh', user_id: session.user.id
-      })))
-      // Log history for items with on_hand > 0
-      const historyRows = toInsert.filter(r => r.on_hand > 0).map(r => ({
-        user_id: session.user.id,
-        item_name: r.name, category: r.category, area: 'foh',
-        event_type: 'csv_import',
-        quantity_before: 0, quantity_change: r.on_hand, quantity_after: r.on_hand,
-        unit_cost_at_time: r.unit_cost,
-        total_value_at_time: r.on_hand * r.unit_cost
-      }))
-      if (historyRows.length > 0) await supabase.from('inventory_history').insert(historyRows)
+      const { data: insertedItems, error: insertError } = await supabase
+        .from('inventory_items')
+        .insert(toInsert.map(r => ({
+          name: r.name.trim(),
+          category: r.category,
+          item_type: VALID_TYPES.includes((r.item_type || '').toLowerCase())
+            ? r.item_type.toLowerCase()
+            : 'unit',
+          on_hand: r.on_hand,
+          unit: r.unit,
+          unit_cost: r.unit_cost,
+          par: r.par,
+          on_menu: r.on_menu,
+          distributor_id: r.distributor_id,
+          notes: r.notes,
+          area: 'foh',
+          user_id: session.user.id
+        })))
+        .select()
+
+      if (insertError) {
+        console.error('Import error:', insertError)
+        alert('Import failed: ' + insertError.message)
+        setImporting(false)
+        return
+      }
+
+      if (insertedItems && insertedItems.length > 0) {
+        const historyRows = insertedItems
+          .filter(item => item.on_hand > 0)
+          .map(item => ({
+            user_id: session.user.id,
+            inventory_item_id: item.id,
+            item_name: item.name,
+            category: item.category,
+            area: 'foh',
+            event_type: 'csv_import',
+            quantity_before: 0,
+            quantity_change: item.on_hand,
+            quantity_after: item.on_hand,
+            unit_cost_at_time: item.unit_cost,
+            total_value_at_time: item.on_hand * item.unit_cost
+          }))
+        if (historyRows.length > 0) {
+          await supabase.from('inventory_history').insert(historyRows)
+        }
+      }
+
       await loadData(session.user.id)
     }
+
     setImportPreview(null)
     setImporting(false)
   }
@@ -239,7 +278,6 @@ export default function FOHInventoryDatabase() {
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
-      {/* Topbar */}
       <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div onClick={() => router.push('/dashboard')} style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
           <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
@@ -249,7 +287,6 @@ export default function FOHInventoryDatabase() {
 
       <div style={{ padding: '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
-        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
           <div>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Inventory Database</h1>
@@ -268,7 +305,6 @@ export default function FOHInventoryDatabase() {
           </div>
         </div>
 
-        {/* Category tabs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px', marginBottom: '20px' }}>
           {CATEGORIES.map(c => {
             const count = items.filter(i => i.category === c.key).length
@@ -284,7 +320,6 @@ export default function FOHInventoryDatabase() {
           })}
         </div>
 
-        {/* Import Preview */}
         {importPreview && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -336,7 +371,6 @@ export default function FOHInventoryDatabase() {
           </div>
         )}
 
-        {/* Add / Edit Form */}
         {showForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
             <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Item' : 'Add Item'}</h3>
@@ -357,6 +391,20 @@ export default function FOHInventoryDatabase() {
                   {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
                 </select>
               </div>
+              {form.category === 'wine' && (
+                <div>
+                  <label style={labelStyle}>Wine Type</label>
+                  <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
+                    <option value="">-- Select --</option>
+                    <option value="red">Red</option>
+                    <option value="white">White</option>
+                    <option value="bubbles">Bubbles</option>
+                    <option value="rose">Rosé</option>
+                    <option value="orange">Orange</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              )}
               <div>
                 <label style={labelStyle}>On Hand</label>
                 <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
@@ -406,7 +454,6 @@ export default function FOHInventoryDatabase() {
           </div>
         )}
 
-        {/* Table */}
         {catItems.length === 0 && !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
             No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items yet. Add one or import from CSV.

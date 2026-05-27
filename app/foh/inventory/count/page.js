@@ -9,7 +9,7 @@ export default function FOHCount() {
   const [sessions, setSessions] = useState([])
   const [locations, setLocations] = useState([])
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState('hub') // hub | setup | counting | history | review
+  const [view, setView] = useState('hub')
   const [activeSession, setActiveSession] = useState(null)
   const [countLines, setCountLines] = useState([])
   const [activeCategory, setActiveCategory] = useState(null)
@@ -25,6 +25,7 @@ export default function FOHCount() {
   const [selectedLocations, setSelectedLocations] = useState([])
   const [wellCount, setWellCount] = useState(2)
   const [setupStep, setSetupStep] = useState(1)
+  const [activeSpiritFilter, setActiveSpiritFilter] = useState('all')
 
   const router = useRouter()
 
@@ -42,11 +43,11 @@ export default function FOHCount() {
   ]
 
   const getDefaultLocations = (wells) => [
-  { name: 'Storage', area: 'foh', sort_order: 1 },
-  { name: 'Backbar', area: 'foh', sort_order: 2 },
-  ...Array.from({ length: wells }, (_, i) => ({ name: `Well ${i + 1}`, area: 'foh', sort_order: 3 + i })),
-  { name: 'Walk-in', area: 'foh', sort_order: 3 + wells },
-]
+    { name: 'Storage', area: 'foh', sort_order: 1 },
+    { name: 'Backbar', area: 'foh', sort_order: 2 },
+    ...Array.from({ length: wells }, (_, i) => ({ name: `Well ${i + 1}`, area: 'foh', sort_order: 3 + i })),
+    { name: 'Walk-in', area: 'foh', sort_order: 3 + wells },
+  ]
 
   const CATEGORIES = [
     { key: 'liquor', label: 'Liquor', icon: '🍾' },
@@ -54,6 +55,44 @@ export default function FOHCount() {
     { key: 'wine', label: 'Wine', icon: '🍷' },
     { key: 'misc', label: 'Misc', icon: '📦' },
   ]
+
+  const SPIRIT_FILTERS = [
+    { key: 'all', label: 'All' },
+    { key: 'bourbon', label: 'Bourbon/Whiskey' },
+    { key: 'gin', label: 'Gin/Vodka' },
+    { key: 'tequila', label: 'Tequila/Mezcal/Agave' },
+    { key: 'rum', label: 'Rum/Brandy' },
+    { key: 'red_wine', label: 'Red' },
+    { key: 'white_wine', label: 'White' },
+    { key: 'bubbles', label: 'Bubbles' },
+    { key: 'rose', label: 'Rosé' },
+    { key: 'orange', label: 'Orange' },
+    { key: 'liqueur', label: 'Liqueurs' },
+    { key: 'misc', label: 'Misc' },
+  ]
+
+  const SPIRIT_KEYWORDS = {
+    bourbon: ['bourbon', 'whiskey', 'whisky', 'rye', 'scotch', 'irish', 'tennessee'],
+    gin: ['gin', 'vodka'],
+    tequila: ['tequila', 'mezcal', 'sotol', 'bacanora', 'raicilla', 'pulque', 'comiteco', 'destilado', 'agave'],
+    rum: ['rum', 'brandy', 'cognac', 'armagnac'],
+    red_wine: ['red', 'cabernet', 'merlot', 'pinot noir', 'syrah', 'malbec', 'zinfandel', 'chianti', 'rioja', 'barolo'],
+    white_wine: ['white', 'chardonnay', 'sauvignon blanc', 'pinot grigio', 'riesling', 'chenin', 'gruner', 'albariño'],
+    bubbles: ['champagne', 'prosecco', 'cava', 'sparkling', 'crémant', 'bubbles', 'pét-nat'],
+    liqueur: ['liqueur', 'amaro', 'aperol', 'campari', 'triple sec', 'cointreau', 'kahlua', 'baileys', 'st. germain', 'elderflower', 'bitters', 'vermouth'],
+    misc: ['beer', 'cider', 'sake', 'seltzer'],
+  }
+
+  const matchesSpiritFilter = (itemName, filter, wineType) => {
+    if (filter === 'all') return true
+    if (filter === 'red_wine') return wineType === 'red'
+    if (filter === 'white_wine') return wineType === 'white'
+    if (filter === 'bubbles') return wineType === 'bubbles'
+    if (filter === 'rose') return wineType === 'rose'
+    if (filter === 'orange') return wineType === 'orange'
+    const name = itemName.toLowerCase()
+    return (SPIRIT_KEYWORDS[filter] || []).some(kw => name.includes(kw))
+  }
 
   useEffect(() => {
     const init = async () => {
@@ -74,7 +113,6 @@ export default function FOHCount() {
     setItems(invItems || [])
     setSessions(sess || [])
 
-    // If no locations set up yet use defaults
     if (!locs || locs.length === 0) {
       setLocations(getDefaultLocations(wellCount).map((l, i) => ({ ...l, id: `default-${i}`, user_id: userId })))
     } else {
@@ -92,12 +130,27 @@ export default function FOHCount() {
     return CATEGORIES.filter(c => scopedItems.some(i => i.category === c.key))
   }
 
-  const startSetup = () => {
+  const startSetup = async () => {
+    const { data: { session } } = await supabase.auth.getSession()
+    
+    // Always reload fresh locations from DB
+    const { data: freshLocs } = await supabase
+      .from('locations')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .eq('area', 'foh')
+      .order('sort_order')
+
+    const locsToShow = freshLocs && freshLocs.length > 0
+      ? freshLocs
+      : getDefaultLocations(wellCount).map((l, i) => ({ ...l, id: `default-${i}`, user_id: session.user.id }))
+
+    setLocations(locsToShow)
     setSetupStep(1)
     setScope('full')
     setCountedBy('')
     setCountDate(new Date().toISOString().split('T')[0])
-    setSelectedLocations(locations.map(l => l.id))
+    setSelectedLocations(locsToShow.map(l => l.id))
     setView('setup')
   }
 
@@ -105,7 +158,6 @@ export default function FOHCount() {
     const { data: { session } } = await supabase.auth.getSession()
     const scopedItems = getScopedItems()
 
-    // Create session
     const { data: newSession } = await supabase.from('count_sessions').insert({
       user_id: session.user.id,
       area: 'foh',
@@ -115,8 +167,15 @@ export default function FOHCount() {
       counted_by: countedBy,
     }).select().single()
 
-    // Ensure locations exist in DB
-    let dbLocations = locations.filter(l => !l.id.startsWith('default-'))
+    // Check for existing locations to avoid duplicates
+    const { data: existingLocs } = await supabase
+      .from('locations')
+      .select('*')
+      .eq('user_id', session.user.id)
+      .eq('area', 'foh')
+
+    let dbLocations = existingLocs || []
+
     if (dbLocations.length === 0) {
       const { data: insertedLocs } = await supabase.from('locations').insert(
         getDefaultLocations(wellCount).map(l => ({ ...l, user_id: session.user.id }))
@@ -125,13 +184,15 @@ export default function FOHCount() {
       setLocations(dbLocations)
     }
 
-    const activeLocs = dbLocations.filter(l => selectedLocations.includes(l.id) || selectedLocations.some(sl => sl.startsWith('default-')))
-    const locsToUse = activeLocs.length > 0 ? activeLocs : dbLocations
+    const locsToUse = selectedLocations.some(sl => sl.startsWith('default-'))
+      ? dbLocations
+      : dbLocations.filter(l => selectedLocations.includes(l.id))
 
-    // Build count lines — one per item per location
+    const finalLocs = locsToUse.length > 0 ? locsToUse : dbLocations
+
     const lines = []
     scopedItems.forEach(item => {
-      locsToUse.forEach(loc => {
+      finalLocs.forEach(loc => {
         lines.push({
           session_id: newSession.id,
           user_id: session.user.id,
@@ -145,6 +206,7 @@ export default function FOHCount() {
           unit: item.unit || '',
           unit_cost: item.unit_cost || 0,
           par: item.par || 0,
+          wine_type: item.wine_type || null,
         })
       })
     })
@@ -154,7 +216,7 @@ export default function FOHCount() {
     setCountLines(insertedLines || [])
     const cats = getCategories()
     setActiveCategory(cats[0]?.key || 'liquor')
-    setActiveLocation(locsToUse[0]?.name || 'Storage')
+    setActiveLocation(finalLocs[0]?.name || 'Storage')
     setView('counting')
   }
 
@@ -168,7 +230,6 @@ export default function FOHCount() {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
 
-    // Aggregate totals per item (sum across all locations)
     const itemTotals = {}
     countLines.forEach(line => {
       if (!itemTotals[line.inventory_item_id]) {
@@ -180,7 +241,6 @@ export default function FOHCount() {
       itemTotals[line.inventory_item_id].total += parseFloat(line.quantity) || 0
     })
 
-    // Update inventory_items on_hand and log history
     const historyRows = []
     for (const [itemId, data] of Object.entries(itemTotals)) {
       const original = items.find(i => i.id === itemId)
@@ -209,7 +269,6 @@ export default function FOHCount() {
       await supabase.from('inventory_history').insert(historyRows)
     }
 
-    // Calculate total value and close session
     const totalValue = Object.values(itemTotals).reduce((sum, d) => sum + (d.total * d.unit_cost), 0)
     await supabase.from('count_sessions').update({
       status: 'submitted',
@@ -253,8 +312,11 @@ export default function FOHCount() {
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
 
-  // Get visible count lines for current category + location
-  const visibleLines = countLines.filter(l => l.category === activeCategory && l.location_name === activeLocation)
+  const visibleLines = countLines.filter(l =>
+    l.category === activeCategory &&
+    l.location_name === activeLocation &&
+    (activeSpiritFilter === 'all' || matchesSpiritFilter(l.item_name, activeSpiritFilter, l.wine_type))
+  )
   const activeLocs = [...new Set(countLines.map(l => l.location_name))]
   const countedCount = countLines.filter(l => parseFloat(l.quantity) > 0).length
   const progressPct = countLines.length > 0 ? Math.round((countedCount / countLines.length) * 100) : 0
@@ -268,7 +330,6 @@ export default function FOHCount() {
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
-      {/* Topbar */}
       <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div onClick={() => router.push('/dashboard')} style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
           <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
@@ -281,7 +342,7 @@ export default function FOHCount() {
 
       <div style={{ padding: '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
-        {/* ── HUB ── */}
+        {/* HUB */}
         {view === 'hub' && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
@@ -294,7 +355,6 @@ export default function FOHCount() {
               </button>
             </div>
 
-            {/* Stats */}
             {sessions.length > 0 && (() => {
               const last = sessions.find(s => s.status === 'submitted')
               return last ? (
@@ -307,7 +367,6 @@ export default function FOHCount() {
               ) : null
             })()}
 
-            {/* In progress warning */}
             {sessions.find(s => s.status === 'in_progress') && (
               <div style={{ background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '10px', padding: '14px 18px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div style={{ fontSize: '13px', color: '#854F0B' }}>⚠ You have a count in progress from {sessions.find(s => s.status === 'in_progress')?.count_date}</div>
@@ -327,7 +386,6 @@ export default function FOHCount() {
               </div>
             )}
 
-            {/* History list */}
             <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Count History</div>
             {sessions.filter(s => s.status === 'submitted').length === 0 ? (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
@@ -365,7 +423,7 @@ export default function FOHCount() {
           </>
         )}
 
-        {/* ── SETUP ── */}
+        {/* SETUP */}
         {view === 'setup' && (
           <>
             <div style={{ marginBottom: '24px' }}>
@@ -398,21 +456,22 @@ export default function FOHCount() {
               </div>
 
               <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Wells</div>
-<div style={{ display: 'flex', gap: '8px', marginBottom: '20px', alignItems: 'center' }}>
-  {[1, 2, 3, 4].map(n => (
-    <div key={n} onClick={() => {
-      setWellCount(n)
-      const newLocs = getDefaultLocations(n).map((l, i) => ({ ...l, id: `default-${i}` }))
-      setLocations(newLocs)
-      setSelectedLocations(newLocs.map(l => l.id))
-    }}
-      style={{ width: '44px', height: '44px', border: `2px solid ${wellCount === n ? '#F5B800' : '#e8e8e8'}`, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: '600', fontSize: '15px', background: wellCount === n ? '#fffbe6' : '#fff', color: wellCount === n ? '#854F0B' : '#555' }}>
-      {n}
-    </div>
-  ))}
-  <span style={{ fontSize: '12px', color: '#aaa', marginLeft: '4px' }}>wells at this bar</span>
-</div>
-<div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Locations</div>
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', alignItems: 'center' }}>
+                {[1, 2, 3, 4].map(n => (
+                  <div key={n} onClick={() => {
+                    setWellCount(n)
+                    const newLocs = getDefaultLocations(n).map((l, i) => ({ ...l, id: `default-${i}` }))
+                    setLocations(newLocs)
+                    setSelectedLocations(newLocs.map(l => l.id))
+                  }}
+                    style={{ width: '44px', height: '44px', border: `2px solid ${wellCount === n ? '#F5B800' : '#e8e8e8'}`, borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', fontWeight: '600', fontSize: '15px', background: wellCount === n ? '#fffbe6' : '#fff', color: wellCount === n ? '#854F0B' : '#555' }}>
+                    {n}
+                  </div>
+                ))}
+                <span style={{ fontSize: '12px', color: '#aaa', marginLeft: '4px' }}>wells at this bar</span>
+              </div>
+
+              <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Locations</div>
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '8px' }}>
                 {locations.map(l => (
                   <div key={l.id} onClick={() => {
@@ -436,10 +495,9 @@ export default function FOHCount() {
           </>
         )}
 
-        {/* ── COUNTING ── */}
+        {/* COUNTING */}
         {view === 'counting' && activeSession && (
           <>
-            {/* Progress bar */}
             <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 18px', marginBottom: '16px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>Count in Progress — {activeSession.count_date}</div>
@@ -453,12 +511,27 @@ export default function FOHCount() {
             {/* Category tabs */}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
               {getCategories().map(c => (
-                <button key={c.key} onClick={() => setActiveCategory(c.key)}
+                <button key={c.key} onClick={() => { setActiveCategory(c.key); setActiveSpiritFilter('all') }}
                   style={{ padding: '7px 16px', border: '1px solid', borderColor: activeCategory === c.key ? '#F5B800' : '#e8e8e8', borderRadius: '20px', fontSize: '12px', fontWeight: activeCategory === c.key ? '700' : '400', cursor: 'pointer', background: activeCategory === c.key ? '#F5B800' : '#fff', color: activeCategory === c.key ? '#000' : '#666' }}>
                   {c.icon} {c.label}
                 </button>
               ))}
             </div>
+
+            {/* Spirit filter pills */}
+            {(activeCategory === 'liquor' || activeCategory === 'wine') && (
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap' }}>
+                {SPIRIT_FILTERS.filter(f => {
+                  if (activeCategory === 'wine') return ['all', 'red_wine', 'white_wine', 'bubbles', 'rose', 'orange'].includes(f.key)
+                  return !['red_wine', 'white_wine', 'bubbles'].includes(f.key)
+                }).map(f => (
+                  <button key={f.key} onClick={() => setActiveSpiritFilter(f.key)}
+                    style={{ padding: '5px 12px', border: '1px solid', borderColor: activeSpiritFilter === f.key ? '#333' : '#e8e8e8', borderRadius: '20px', fontSize: '11px', fontWeight: activeSpiritFilter === f.key ? '600' : '400', cursor: 'pointer', background: activeSpiritFilter === f.key ? '#333' : '#fff', color: activeSpiritFilter === f.key ? '#fff' : '#666', whiteSpace: 'nowrap' }}>
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Location tabs */}
             <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -493,7 +566,6 @@ export default function FOHCount() {
                         <td style={{ padding: '10px 14px', textAlign: 'right', color: '#aaa', fontSize: '12px' }}>{line.par > 0 ? Number(line.par).toFixed(1) : '--'}</td>
                         <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
-                            {/* Partial buttons for bottles */}
                             {(line.item_type === 'bottle' || line.item_type === 'keg') && (
                               <div style={{ display: 'flex', gap: '4px' }}>
                                 {['0.25', '0.5', '0.75'].map(p => (
@@ -522,7 +594,6 @@ export default function FOHCount() {
               )}
             </div>
 
-            {/* Submit */}
             <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div style={{ fontSize: '13px', color: '#aaa' }}>
                 {progressPct < 100 ? `${100 - progressPct}% of items still at zero — review before submitting` : '✓ All items counted'}
@@ -535,7 +606,7 @@ export default function FOHCount() {
           </>
         )}
 
-        {/* ── REVIEW ── */}
+        {/* REVIEW */}
         {view === 'review' && reviewSession && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
@@ -551,7 +622,6 @@ export default function FOHCount() {
               </button>
             </div>
 
-            {/* Group by category */}
             {CATEGORIES.map(cat => {
               const catLines = reviewLines.filter(l => l.category === cat.key)
               if (catLines.length === 0) return null
