@@ -58,6 +58,20 @@ export default function Signup() {
       setError(error.message)
       setLoading(false)
     } else {
+      // Send welcome email
+      try {
+        await fetch('/api/email/welcome', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            firstName: formData.firstName,
+            email: formData.email,
+            barName: formData.barName,
+          })
+        })
+      } catch (emailError) {
+        console.error('Welcome email failed:', emailError)
+      }
       setSuccess(true)
       setLoading(false)
     }
