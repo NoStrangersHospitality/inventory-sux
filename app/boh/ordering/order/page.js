@@ -130,6 +130,18 @@ export default function BOHOrder() {
   const submitOrder = async () => {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
+
+    // Get profile for manager name and bar name
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name, bar_name')
+      .eq('id', session.user.id)
+      .single()
+
+    const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
+    const barName = profile?.bar_name || 'Your Bar'
+    const orderDate = new Date().toLocaleDateString()
+
     const { data: order } = await supabase.from('orders').insert({
       user_id: session.user.id,
       status: 'submitted',
@@ -154,7 +166,79 @@ export default function BOHOrder() {
         })
       })
     })
+
     await supabase.from('order_lines').insert(lines)
+
+    // Send email and SMS per vendor
+    const vendorGroups = {}
+    lines.forEach(line => {
+      if (!vendorGroups[line.distributor_name]) {
+        vendorGroups[line.distributor_name] = {
+          name: line.distributor_name,
+          id: line.distributor_id,
+          lines: []
+        }
+      }
+      vendorGroups[line.distributor_name].lines.push(line)
+    })
+
+    // Get vendor contact details
+    const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
+    const { data: distContacts } = await supabase
+      .from('distributors')
+      .select('id, name, email, phone, order_method')
+      .in('id', distIds)
+
+    for (const [vendorName, group] of Object.entries(vendorGroups)) {
+      const contact = distContacts?.find(d => d.id === group.id)
+      if (!contact) continue
+
+      const orderLines = group.lines.filter(l => l.final_qty > 0)
+      if (orderLines.length === 0) continue
+
+      // Send email if vendor has email and order method includes email
+      if (contact.email && (contact.order_method === 'email' || contact.order_method === 'both')) {
+        try {
+          await fetch('/api/email/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              distributorName: contact.name,
+              distributorEmail: contact.email,
+              barName,
+              managerName,
+              orderLines,
+              orderId: order.id,
+              orderDate
+            })
+          })
+        } catch (err) {
+          console.error('Order email failed for', contact.name, err)
+        }
+      }
+
+      // Send SMS if vendor has phone and order method includes sms
+      if (contact.phone && (contact.order_method === 'sms' || contact.order_method === 'both')) {
+        try {
+          await fetch('/api/sms/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              distributorPhone: contact.phone,
+              distributorName: contact.name,
+              barName,
+              managerName,
+              orderLines,
+              orderId: order.id,
+              orderDate
+            })
+          })
+        } catch (err) {
+          console.error('Order SMS failed for', contact.name, err)
+        }
+      }
+    }
+
     setSubmitting(false)
     setSubmitted(true)
   }
