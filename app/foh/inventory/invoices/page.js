@@ -68,19 +68,17 @@ export default function FOHInvoices() {
       // Store file in Supabase Storage
       const fileName = `${session.user.id}/${Date.now()}_${file.name}`
       await supabase.storage.from('invoices').upload(fileName, file)
-      const { data: urlData } = supabase.storage.from('invoices').getPublicUrl(fileName)
 
-      // Save invoice record
-      const { data: invoice } = await supabase.from('invoices').insert({
-        user_id: session.user.id,
-        vendor: data.vendor,
-        invoice_number: data.invoice_number,
-        invoice_date: data.invoice_date,
-        total_amount: data.total_amount,
-        status: 'processed',
-        file_url: urlData?.publicUrl || null,
-        raw_text: JSON.stringify(data.line_items)
-      }).select().single()
+const { data: invoice } = await supabase.from('invoices').insert({
+  user_id: session.user.id,
+  vendor: data.vendor,
+  invoice_number: data.invoice_number,
+  invoice_date: data.invoice_date,
+  total_amount: data.total_amount,
+  status: 'processed',
+  file_url: fileName,
+  raw_text: JSON.stringify(data.line_items)
+}).select().single()
 
       setScanResult({ ...data, invoice_id: invoice.id })
       setView('review')
@@ -341,11 +339,19 @@ total_value_at_time: (parseFloat(line.qty) || 0) * (line.case_size || 1) * (line
                           </td>
                           <td style={{ padding: '12px 14px', textAlign: 'right' }}>
                             {inv.file_url && (
-                              <a href={inv.file_url} target="_blank" rel="noopener noreferrer"
-                                style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', textDecoration: 'none' }}>
-                                View
-                              </a>
-                            )}
+  <button
+    onClick={async () => {
+      const filePath = inv.file_url.startsWith('http') 
+        ? inv.file_url.split('/invoices/')[1]?.split('?')[0]
+        : inv.file_url
+      const { data } = await supabase.storage.from('invoices').createSignedUrl(filePath, 3600)
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+      else alert('Could not generate view URL. Please try again.')
+    }}
+    style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+    View
+  </button>
+)}
                           </td>
                         </tr>
                       )
