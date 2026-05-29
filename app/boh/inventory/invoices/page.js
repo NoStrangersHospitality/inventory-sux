@@ -45,7 +45,7 @@ export default function BOHInvoices() {
 
   const loadData = async (userId) => {
     const [{ data: invs }, { data: items }] = await Promise.all([
-      supabase.from('invoices').select('*').eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
+      supabase.from('invoices').select('*').eq('user_id', userId).eq('area', 'boh').order('created_at', { ascending: false }).limit(20),
       supabase.from('inventory_items').select('*').eq('user_id', userId).eq('area', 'boh').order('name')
     ])
     setInvoices(invs || [])
