@@ -131,7 +131,6 @@ export default function BOHOrder() {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
 
-    // Get profile for manager name and bar name
     const { data: profile } = await supabase
       .from('profiles')
       .select('first_name, last_name, bar_name')
@@ -145,6 +144,7 @@ export default function BOHOrder() {
     const { data: order } = await supabase.from('orders').insert({
       user_id: session.user.id,
       status: 'submitted',
+      area: 'boh',
       submitted_at: new Date().toISOString()
     }).select().single()
 
@@ -169,7 +169,6 @@ export default function BOHOrder() {
 
     await supabase.from('order_lines').insert(lines)
 
-    // Send email and SMS per vendor
     const vendorGroups = {}
     lines.forEach(line => {
       if (!vendorGroups[line.distributor_name]) {
@@ -182,7 +181,6 @@ export default function BOHOrder() {
       vendorGroups[line.distributor_name].lines.push(line)
     })
 
-    // Get vendor contact details
     const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
     const { data: distContacts } = await supabase
       .from('distributors')
@@ -196,7 +194,6 @@ export default function BOHOrder() {
       const orderLines = group.lines.filter(l => l.final_qty > 0)
       if (orderLines.length === 0) continue
 
-      // Send email if vendor has email and order method includes email
       if (contact.email && (contact.order_method === 'email' || contact.order_method === 'both')) {
         try {
           await fetch('/api/email/order', {
@@ -217,7 +214,6 @@ export default function BOHOrder() {
         }
       }
 
-      // Send SMS if vendor has phone and order method includes sms
       if (contact.phone && (contact.order_method === 'sms' || contact.order_method === 'both')) {
         try {
           await fetch('/api/sms/order', {
@@ -237,6 +233,58 @@ export default function BOHOrder() {
           console.error('Order SMS failed for', contact.name, err)
         }
       }
+    }
+
+    // Generate order PDF and send confirmation email
+    try {
+      const distGroupsForPDF = Object.entries(vendorGroups).map(([name, group]) => {
+        const contact = distContacts?.find(d => d.id === group.id)
+        return {
+          name,
+          email: contact?.email || null,
+          lines: group.lines.filter(l => l.final_qty > 0)
+        }
+      }).filter(g => g.lines.length > 0)
+
+      const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
+
+      const pdfRes = await fetch('/api/orders/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: order.id,
+          userId: session.user.id,
+          barName,
+          managerName,
+          orderDate,
+          distributorGroups: distGroupsForPDF,
+          totalItems
+        })
+      })
+
+      const pdfData = await pdfRes.json()
+      console.log('PDF generation response:', pdfData)
+
+      if (pdfData.pdfUrl) {
+        const confirmRes = await fetch('/api/email/order-confirmation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: session.user.email,
+            barName,
+            managerName,
+            orderDate,
+            orderId: order.id,
+            pdfUrl: pdfData.pdfUrl,
+            distributorGroups: distGroupsForPDF,
+            totalItems
+          })
+        })
+        const confirmData = await confirmRes.json()
+        console.log('Confirmation email response:', confirmData)
+      }
+    } catch (err) {
+      console.error('PDF/email confirmation error:', err)
     }
 
     setSubmitting(false)
