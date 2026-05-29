@@ -89,7 +89,8 @@ const { data: invoice } = await supabase.from('invoices').insert({
   total_amount: data.total_amount,
   status: 'processed',
   file_url: fileName,
-  raw_text: JSON.stringify(data.line_items)
+  raw_text: JSON.stringify(data.line_items),
+  area: 'boh'
 }).select().single()
 
       setScanResult({ ...data, invoice_id: invoice.id })
