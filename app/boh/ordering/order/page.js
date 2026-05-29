@@ -183,7 +183,7 @@ export default function BOHOrder() {
 
     const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
     const { data: distContacts } = await supabase
-      .from('distributors')
+      .from('vendors')
       .select('id, name, email, phone, order_method')
       .in('id', distIds)
 
