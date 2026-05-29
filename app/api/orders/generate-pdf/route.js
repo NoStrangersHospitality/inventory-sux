@@ -100,7 +100,7 @@ export async function POST(request) {
 
       // Distributor header
       page.drawRectangle({ x: MARGIN, y: y - 18, width: W - MARGIN * 2, height: 20, color: BLACK })
-      page.drawText(`🚚  ${group.name}`, { x: MARGIN + 8, y: y - 13, size: 10, font: boldFont, color: WHITE })
+      page.drawText(group.name, { x: MARGIN + 8, y: y - 13, size: 10, font: boldFont, color: WHITE })
 
       if (group.email) {
         const emailW = regularFont.widthOfTextAtSize(group.email, 8)
