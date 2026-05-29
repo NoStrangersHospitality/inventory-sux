@@ -101,11 +101,11 @@ export default function Distributors() {
                 <label style={labelStyle}>Order Method</label>
                 <select style={inputStyle} value={form.order_method} onChange={e => setForm(f => ({ ...f, order_method: e.target.value }))}>
                   <option value="">-- Select --</option>
-                  <option>Email</option>
-                  <option>Phone</option>
-                  <option>Text</option>
-                  <option>Online Portal</option>
-                  <option>Sales Rep Visit</option>
+                  <option value="email">Email</option>
+                  <option value="sms">SMS / Text</option>
+                  <option value="both">Email + SMS</option>
+                  <option value="portal">Online Portal</option>
+                  <option value="visit">Sales Rep Visit</option>
                 </select>
               </div>
               <div>

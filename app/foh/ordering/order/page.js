@@ -140,6 +140,17 @@ export default function Order() {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
 
+    // Get profile for manager name and bar name
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('first_name, last_name, bar_name')
+      .eq('id', session.user.id)
+      .single()
+
+    const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
+    const barName = profile?.bar_name || 'Your Bar'
+    const orderDate = new Date().toLocaleDateString()
+
     const { data: order } = await supabase.from('orders').insert({
       user_id: session.user.id,
       status: 'submitted',
@@ -166,6 +177,74 @@ export default function Order() {
     })
 
     await supabase.from('order_lines').insert(lines)
+
+    // Send email and SMS per distributor
+    const distributorGroups = {}
+    lines.forEach(line => {
+      if (!distributorGroups[line.distributor_name]) {
+        distributorGroups[line.distributor_name] = {
+          name: line.distributor_name,
+          id: line.distributor_id,
+          lines: []
+        }
+      }
+      distributorGroups[line.distributor_name].lines.push(line)
+    })
+
+    const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
+    const { data: distContacts } = await supabase
+      .from('distributors')
+      .select('id, name, email, phone, order_method')
+      .in('id', distIds)
+
+    for (const [distName, group] of Object.entries(distributorGroups)) {
+      const contact = distContacts?.find(d => d.id === group.id)
+      if (!contact) continue
+
+      const orderLines = group.lines.filter(l => l.final_qty > 0)
+      if (orderLines.length === 0) continue
+
+      if (contact.email && (contact.order_method === 'email' || contact.order_method === 'both')) {
+        try {
+          await fetch('/api/email/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              distributorName: contact.name,
+              distributorEmail: contact.email,
+              barName,
+              managerName,
+              orderLines,
+              orderId: order.id,
+              orderDate
+            })
+          })
+        } catch (err) {
+          console.error('Order email failed for', contact.name, err)
+        }
+      }
+
+      if (contact.phone && (contact.order_method === 'sms' || contact.order_method === 'both')) {
+        try {
+          await fetch('/api/sms/order', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              distributorPhone: contact.phone,
+              distributorName: contact.name,
+              barName,
+              managerName,
+              orderLines,
+              orderId: order.id,
+              orderDate
+            })
+          })
+        } catch (err) {
+          console.error('Order SMS failed for', contact.name, err)
+        }
+      }
+    }
+
     setSubmitting(false)
     setSubmitted(true)
   }
@@ -192,7 +271,7 @@ export default function Order() {
       <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '48px', textAlign: 'center', maxWidth: '400px' }}>
         <div style={{ fontSize: '52px', marginBottom: '16px' }}>✅</div>
         <h2 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Order submitted!</h2>
-        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your order has been saved. SMS and email sends will be live once Twilio and SendGrid are connected.</p>
+        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your order has been sent to your distributors via email and SMS.</p>
         <button onClick={() => router.push('/foh/ordering')} style={btnStyle(true)}>← Back to Ordering</button>
       </div>
     </div>

@@ -10,7 +10,6 @@ export async function POST(request) {
     const html = formData.get('html') || formData.get('Html') || ''
     const messageId = formData.get('Message-ID') || formData.get('message-id') || ''
 
-    // Extract email address from from field
     const emailMatch = from.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)
     const fromEmail = emailMatch ? emailMatch[0].toLowerCase() : ''
 
@@ -18,10 +17,8 @@ export async function POST(request) {
       return Response.json({ error: 'No sender email found' }, { status: 400 })
     }
 
-    // Use plain text body, fall back to stripping HTML
     let messageBody = text || html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 
-    // Strip quoted reply content (lines starting with > or "On ... wrote:")
     messageBody = messageBody
       .split('\n')
       .filter(line => !line.startsWith('>') && !line.match(/^On .* wrote:/))
@@ -37,7 +34,6 @@ export async function POST(request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY
     )
 
-    // Find distributor by email
     const { data: distributors } = await supabase
       .from('distributors')
       .select('id, name, user_id')
@@ -50,7 +46,6 @@ export async function POST(request) {
 
     const dist = distributors[0]
 
-    // Find most recent order for this distributor
     const { data: recentLine } = await supabase
       .from('order_lines')
       .select('order_id, orders(id, user_id)')
@@ -67,7 +62,6 @@ export async function POST(request) {
     const orderId = recentLine.orders.id
     const userId = recentLine.orders.user_id
 
-    // Save reply
     await supabase.from('order_replies').insert({
       order_id: orderId,
       user_id: userId,
