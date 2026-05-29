@@ -244,6 +244,55 @@ export default function Order() {
         }
       }
     }
+    // Generate order PDF and send confirmation email
+    try {
+      const distGroupsForPDF = Object.entries(distributorGroups).map(([name, group]) => {
+        const contact = distContacts?.find(d => d.id === group.id)
+        return {
+          name,
+          email: contact?.email || null,
+          lines: group.lines.filter(l => l.final_qty > 0)
+        }
+      }).filter(g => g.lines.length > 0)
+
+      const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
+
+      const pdfRes = await fetch('/api/orders/generate-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: order.id,
+          userId: session.user.id,
+          barName,
+          managerName,
+          orderDate,
+          distributorGroups: distGroupsForPDF,
+          totalItems
+        })
+      })
+
+      const pdfData = await pdfRes.json()
+
+      // Send confirmation email to subscriber
+      if (pdfData.pdfUrl) {
+        await fetch('/api/email/order-confirmation', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: session.user.email,
+            barName,
+            managerName,
+            orderDate,
+            orderId: order.id,
+            pdfUrl: pdfData.pdfUrl,
+            distributorGroups: distGroupsForPDF,
+            totalItems
+          })
+        })
+      }
+    } catch (err) {
+      console.error('PDF/email confirmation error:', err)
+    }
 
     setSubmitting(false)
     setSubmitted(true)

@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation'
 export default function Ordering() {
   const [loading, setLoading] = useState(true)
   const [counts, setCounts] = useState({ items: 0, distributors: 0 })
+  const [orders, setOrders] = useState([])
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -18,19 +19,34 @@ export default function Ordering() {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      const [{ count: itemCount }, { count: distCount }] = await Promise.all([
-        supabase.from('items').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
-        supabase.from('distributors').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id)
+      const [{ count: itemCount }, { count: distCount }, { data: orderData }] = await Promise.all([
+        supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true),
+        supabase.from('distributors').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).order('submitted_at', { ascending: false }).limit(10)
       ])
       setCounts({ items: itemCount || 0, distributors: distCount || 0 })
+      setOrders(orderData || [])
       setLoading(false)
     }
     init()
   }, [])
 
+  const viewOrderPDF = async (order) => {
+    if (order.pdf_url) {
+      const filePath = order.pdf_url.startsWith('http')
+        ? order.pdf_url.split('/orders/')[1]?.split('?')[0]
+        : order.pdf_url
+      const { data } = await supabase.storage.from('orders').createSignedUrl(filePath, 3600)
+      if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+      else alert('PDF not available. This order may have been placed before PDF generation was enabled.')
+    } else {
+      alert('PDF not available for this order.')
+    }
+  }
+
   const tiles = [
     { title: 'Order', desc: 'Build and submit a new order', icon: '📋', href: '/foh/ordering/order' },
-    { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} in catalog`, icon: '🍾', href: '/foh/ordering/items' },
+    { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} on menu`, icon: '🍾', href: '/foh/ordering/items' },
     { title: 'Distributors', desc: `${counts.distributors} rep${counts.distributors !== 1 ? 's' : ''} on file`, icon: '🚚', href: '/foh/ordering/distributors' },
   ]
 
@@ -55,7 +71,8 @@ export default function Ordering() {
           <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Manage your items, distributors, and place orders.</p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '20px' }}>
+        {/* Tiles */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '20px', marginBottom: '36px' }}>
           {tiles.map(t => (
             <div key={t.title} onClick={() => router.push(t.href)}
               style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '32px 24px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s, box-shadow .15s' }}
@@ -67,6 +84,50 @@ export default function Ordering() {
             </div>
           ))}
         </div>
+
+        {/* Order history */}
+        <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Order History</div>
+        </div>
+
+        {orders.length === 0 ? (
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '36px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
+            No orders yet. Build your first order above.
+          </div>
+        ) : (
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>{['Order Date', 'Status', 'Items', ''].map((h, i) => (
+                  <th key={i} style={{ textAlign: 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 16px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {orders.map(order => (
+                  <tr key={order.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
+                    <td style={{ padding: '12px 16px', fontWeight: '500', color: '#000', fontSize: '13px' }}>
+                      {order.submitted_at ? new Date(order.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '--'}
+                    </td>
+                    <td style={{ padding: '12px 16px' }}>
+                      <span style={{ background: '#EAF3DE', color: '#27500A', border: '1px solid #97C459', borderRadius: '10px', fontSize: '11px', padding: '2px 8px', fontWeight: '500' }}>
+                        Submitted
+                      </span>
+                    </td>
+                    <td style={{ padding: '12px 16px', color: '#555', fontSize: '13px' }}>
+                      {order.order_lines?.[0]?.count || '--'} items
+                    </td>
+                    <td style={{ padding: '12px 16px', textAlign: 'right' }}>
+                      <button onClick={() => viewOrderPDF(order)}
+                        style={{ background: 'none', border: '1px solid #e8e8e8', color: '#555', padding: '4px 12px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+                        📄 View PDF
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   )
