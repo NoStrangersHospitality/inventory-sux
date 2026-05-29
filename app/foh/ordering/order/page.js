@@ -272,6 +272,7 @@ export default function Order() {
       })
 
       const pdfData = await pdfRes.json()
+      console.log('PDF generation response:', pdfData)
 
       // Send confirmation email to subscriber
       if (pdfData.pdfUrl) {
@@ -292,6 +293,7 @@ export default function Order() {
       }
     } catch (err) {
       console.error('PDF/email confirmation error:', err)
+      console.error('PDF error details:', JSON.stringify(err))
     }
 
     setSubmitting(false)
