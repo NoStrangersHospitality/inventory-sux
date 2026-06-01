@@ -34,39 +34,73 @@ export async function POST(request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY
     )
 
-    const { data: distributors } = await supabase
-      .from('distributors')
-      .select('id, name, user_id')
-      .ilike('email', fromEmail)
+    // Try to match order directly from subject line first — bulletproof multi-tenant
+    const orderIdMatch = subject.match(/\[#([A-Z0-9]{8})\]/)
+    
+    let orderId, userId, distId, distName
 
-    if (!distributors || distributors.length === 0) {
-      console.log('No distributor found for email:', fromEmail)
-      return Response.json({ received: true })
+    if (orderIdMatch) {
+      // Match by order ID prefix — exact, no ambiguity across subscribers
+      const orderPrefix = orderIdMatch[1].toLowerCase()
+
+      const { data: orders } = await supabase
+        .from('orders')
+        .select('id, user_id, distributor_id, distributors(id, name)')
+        .ilike('id', `${orderPrefix}%`)
+        .limit(1)
+
+      if (orders && orders.length > 0) {
+        const order = orders[0]
+        orderId = order.id
+        userId = order.user_id
+        distId = order.distributor_id
+        distName = order.distributors?.name || 'Unknown'
+      }
     }
 
-    const dist = distributors[0]
+    // Fallback: match by distributor email if no order ID in subject
+    if (!orderId) {
+      const { data: distributors } = await supabase
+        .from('distributors')
+        .select('id, name, user_id')
+        .ilike('email', fromEmail)
 
-    const { data: recentLine } = await supabase
-      .from('order_lines')
-      .select('order_id, orders(id, user_id)')
-      .eq('distributor_id', dist.id)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .single()
+      if (!distributors || distributors.length === 0) {
+        console.log('No distributor found for email:', fromEmail)
+        return Response.json({ received: true })
+      }
 
-    if (!recentLine?.orders) {
-      console.log('No recent order found for distributor:', dist.name)
-      return Response.json({ received: true })
+      const dist = distributors[0]
+      distId = dist.id
+      distName = dist.name
+
+      const { data: recentLine } = await supabase
+        .from('order_lines')
+        .select('order_id, orders(id, user_id)')
+        .eq('distributor_id', dist.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (!recentLine?.orders) {
+        console.log('No recent order found for distributor:', dist.name)
+        return Response.json({ received: true })
+      }
+
+      orderId = recentLine.orders.id
+      userId = recentLine.orders.user_id
     }
 
-    const orderId = recentLine.orders.id
-    const userId = recentLine.orders.user_id
+    if (!orderId || !userId) {
+      console.log('Could not resolve order for reply from:', fromEmail)
+      return Response.json({ received: true })
+    }
 
     await supabase.from('order_replies').insert({
       order_id: orderId,
       user_id: userId,
-      distributor_id: dist.id,
-      distributor_name: dist.name,
+      distributor_id: distId,
+      distributor_name: distName,
       message: messageBody,
       channel: 'email',
       from_number: fromEmail,

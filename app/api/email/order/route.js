@@ -33,10 +33,10 @@ export async function POST(request) {
         name: process.env.SENDGRID_FROM_NAME,
       },
       replyTo: {
-        email: process.env.SENDGRID_FROM_EMAIL,
+        email: `orders@parse.inventorysux.com`,
         name: `${managerName} via Inventory Sux`,
       },
-      subject: `Order from ${barName} — ${orderDate}`,
+      subject: `Order from ${barName} — ${orderDate} [#${orderId?.slice(0, 8).toUpperCase()}]`,
       html: `
         <!DOCTYPE html>
         <html>
