@@ -176,7 +176,8 @@ export default function Order() {
       })
     })
 
-    await supabase.from('order_lines').insert(lines)
+    const { error: linesError } = await supabase.from('order_lines').insert(lines)
+if (linesError) console.error('Order lines insert error:', linesError)
 
     // Send email and SMS per distributor
     const distributorGroups = {}
