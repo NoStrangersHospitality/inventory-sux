@@ -115,16 +115,15 @@ export async function POST(request) {
     console.log('inserting reply for order:', orderId, 'user:', userId)
 
     const { error: insertError } = await supabase.from('order_replies').insert({
-      order_id: orderId,
-      user_id: userId,
-      distributor_id: distId,
-      distributor_name: distName,
-      message: messageBody,
-      channel: 'email',
-      from_number: fromEmail,
-      twilio_sid: messageId,
-      read: false
-    })
+  order_id: orderId,
+  user_id: userId,
+  distributor_name: distName,
+  message: messageBody,
+  channel: 'email',
+  from_number: fromEmail,
+  twilio_sid: messageId,
+  read: false
+})
 
     console.log('insertError:', JSON.stringify(insertError))
     console.log('=== END DEBUG ===')
