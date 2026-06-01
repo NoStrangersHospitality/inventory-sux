@@ -20,6 +20,8 @@ export default function Dashboard() {
   )
 
   useEffect(() => {
+    let realtimeChannel
+
     const getUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
@@ -28,8 +30,31 @@ export default function Dashboard() {
       setProfile(profile)
       await loadReplies(session.user.id)
       setLoading(false)
+
+      // Real-time subscription — bell updates instantly when a reply lands
+      realtimeChannel = supabase
+        .channel('order_replies_live')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'order_replies',
+            filter: `user_id=eq.${session.user.id}`
+          },
+          (payload) => {
+            setReplies(prev => [payload.new, ...prev])
+            setUnreadCount(prev => prev + 1)
+          }
+        )
+        .subscribe()
     }
+
     getUser()
+
+    return () => {
+      if (realtimeChannel) supabase.removeChannel(realtimeChannel)
+    }
   }, [])
 
   const loadReplies = async (userId) => {
