@@ -167,10 +167,9 @@ export default function BOHOrder() {
       })
     })
 
-    console.log('BOH Lines to insert:', JSON.stringify(lines))
-const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
-console.log('BOH Inserted lines:', insertedLines)
-console.log('BOH Lines error:', linesError)
+    
+await supabase.from('order_lines').insert(lines)
+
 
     const vendorGroups = {}
     lines.forEach(line => {
