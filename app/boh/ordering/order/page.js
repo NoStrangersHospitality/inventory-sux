@@ -190,6 +190,9 @@ console.log('BOH Lines error:', linesError)
       .select('id, name, email, phone, order_method')
       .in('id', distIds)
 
+      console.log('distIds:', distIds)
+console.log('distContacts:', distContacts)
+
     for (const [vendorName, group] of Object.entries(vendorGroups)) {
       const contact = distContacts?.find(d => d.id === group.id)
       if (!contact) continue
