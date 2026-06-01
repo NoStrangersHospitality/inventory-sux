@@ -40,21 +40,17 @@ export async function POST(request) {
     let orderId, userId, distId, distName
 
     if (orderIdMatch) {
-      // Match by order ID prefix — exact, no ambiguity across subscribers
       const orderPrefix = orderIdMatch[1].toLowerCase()
 
       const { data: orders } = await supabase
-        .from('orders')
-        .select('id, user_id, distributor_id, distributors(id, name)')
-        .ilike('id', `${orderPrefix}%`)
-        .limit(1)
+        .rpc('find_order_by_prefix', { prefix: orderPrefix })
 
       if (orders && orders.length > 0) {
         const order = orders[0]
         orderId = order.id
         userId = order.user_id
         distId = order.distributor_id
-        distName = order.distributors?.name || 'Unknown'
+        distName = order.distributor_name || 'Unknown'
       }
     }
 
