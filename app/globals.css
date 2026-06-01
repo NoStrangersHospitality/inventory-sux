@@ -24,3 +24,32 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Prevent text-selection cursor on UI chrome */
+*,
+*::before,
+*::after {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Re-enable selection where it actually belongs */
+input,
+textarea,
+select,
+[contenteditable],
+p,
+li,
+td,
+th,
+span.selectable {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+a,
+button,
+[role="button"] {
+  cursor: pointer;
+}
