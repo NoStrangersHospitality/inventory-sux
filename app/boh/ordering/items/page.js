@@ -111,9 +111,9 @@ export default function BOHItems() {
       notes: form.notes, on_menu: true,
       area: 'boh', user_id: session.user.id
     if (editingId) {
-  const { error: updateError } = await supabase.from('inventory_items').update(payload).eq('id', editingId)
-  if (updateError) console.error('Update error:', updateError)
-  else console.log('Updated successfully')
+      const { error: updateError } = await supabase.from('inventory_items').update(payload).eq('id', editingId)
+      if (updateError) console.error('Update error:', updateError)
+      else console.log('Updated successfully')
 } else {
   const { error: insertError } = await supabase.from('inventory_items').insert(payload)
   if (insertError) console.error('Insert error:', insertError)
