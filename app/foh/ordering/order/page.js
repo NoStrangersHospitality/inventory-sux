@@ -205,7 +205,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
       const orderLines = group.lines.filter(l => l.final_qty > 0)
       if (orderLines.length === 0) continue
 
-      if (contact.email && (contact.order_method === 'email' || contact.order_method === 'both')) {
+      if (contact.email && (contact.order_method?.toLowerCase() === 'email' || contact.order_method?.toLowerCase() === 'both')) {
         try {
           await fetch('/api/email/order', {
             method: 'POST',
@@ -225,7 +225,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
         }
       }
 
-      if (contact.phone && (contact.order_method === 'sms' || contact.order_method === 'both')) {
+      if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
         try {
           await fetch('/api/sms/order', {
             method: 'POST',
