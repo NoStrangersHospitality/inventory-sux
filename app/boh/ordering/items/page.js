@@ -110,6 +110,7 @@ export default function BOHItems() {
       distributor_id: form.vendor_id || null,
       notes: form.notes, on_menu: true,
       area: 'boh', user_id: session.user.id
+    }
     if (editingId) {
       const { error: updateError } = await supabase.from('inventory_items').update(payload).eq('id', editingId)
       if (updateError) console.error('Update error:', updateError)
