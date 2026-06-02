@@ -5,7 +5,7 @@ import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
 export default function Dashboard() {
-  const [user, setUser] = useState(null)
+  
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -18,14 +18,24 @@ export default function Dashboard() {
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
-
+  const loadReplies = async (userId) => {
+    const { data } = await supabase
+      .from('order_replies')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(20)
+    setReplies(data || [])
+    setUnreadCount((data || []).filter(r => !r.read).length)
+  }
+  
   useEffect(() => {
     let realtimeChannel
 
     const getUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      setUser(session.user)
+      
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       setProfile(profile)
       await loadReplies(session.user.id)
@@ -57,16 +67,7 @@ export default function Dashboard() {
     }
   }, [])
 
-  const loadReplies = async (userId) => {
-    const { data } = await supabase
-      .from('order_replies')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(20)
-    setReplies(data || [])
-    setUnreadCount((data || []).filter(r => !r.read).length)
-  }
+  
 
   const markAllRead = async () => {
     const { data: { session } } = await supabase.auth.getSession()
