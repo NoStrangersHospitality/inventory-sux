@@ -315,6 +315,18 @@ export default function Signup() {
           <p style={{ fontSize: '11px', color: '#ccc', textAlign: 'center', marginTop: '12px' }}>
             Card required at next step. No charge for 14 days.
           </p>
+
+          <p style={{ fontSize: '11px', color: '#ccc', textAlign: 'center', marginTop: '8px', lineHeight: '1.6' }}>
+            By creating an account you agree to our{' '}
+            <Link href="/terms" style={{ color: '#aaa', textDecoration: 'underline' }}>
+              Terms of Service
+            </Link>
+            {' '}and{' '}
+            <Link href="/privacy" style={{ color: '#aaa', textDecoration: 'underline' }}>
+              Privacy Policy
+            </Link>
+            .
+          </p>
         </div>
       </div>
     </div>

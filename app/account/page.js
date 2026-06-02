@@ -284,6 +284,21 @@ export default function Account() {
           </button>
         </div>
 
+        {/* Legal */}
+        <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e8e8e8', display: 'flex', gap: '16px', justifyContent: 'center' }}>
+          <a href="/privacy" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#000'}
+            onMouseLeave={e => e.currentTarget.style.color = '#aaa'}>
+            Privacy Policy
+          </a>
+          <span style={{ fontSize: '12px', color: '#e8e8e8' }}>|</span>
+          <a href="/terms" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}
+            onMouseEnter={e => e.currentTarget.style.color = '#000'}
+            onMouseLeave={e => e.currentTarget.style.color = '#aaa'}>
+            Terms of Service
+          </a>
+        </div>
+
       </div>
     </div>
   )
