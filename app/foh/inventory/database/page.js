@@ -17,7 +17,7 @@ export default function FOHInventoryDatabase() {
   const [form, setForm] = useState({
     name: '', category: 'liquor', item_type: 'bottle',
     on_hand: '', unit: '', unit_cost: '', par: '',
-    on_menu: false, distributor_id: '', notes: ''
+    on_menu: false, distributor_id: '', notes: '', wine_type: '', item_number: ''
   })
   const router = useRouter()
 
@@ -46,6 +46,15 @@ export default function FOHInventoryDatabase() {
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
   const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
 
+  const loadData = async (userId) => {
+    const [{ data: invItems }, { data: dists }] = await Promise.all([
+      supabase.from('inventory_items').select('*').eq('user_id', userId).eq('area', 'foh').order('name'),
+      supabase.from('distributors').select('*').eq('user_id', userId).order('name')
+    ])
+    setItems(invItems || [])
+    setDistributors(dists || [])
+  }
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -56,15 +65,6 @@ export default function FOHInventoryDatabase() {
     init()
   }, [])
 
-  const loadData = async (userId) => {
-    const [{ data: invItems }, { data: dists }] = await Promise.all([
-      supabase.from('inventory_items').select('*').eq('user_id', userId).eq('area', 'foh').order('name'),
-      supabase.from('distributors').select('*').eq('user_id', userId).order('name')
-    ])
-    setItems(invItems || [])
-    setDistributors(dists || [])
-  }
-
   const fmt = (n) => '$' + Number(n).toFixed(2)
   const catItems = items.filter(i => i.category === activeCategory)
   const totalValue = catItems.reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
@@ -73,7 +73,7 @@ export default function FOHInventoryDatabase() {
     setForm({
       name: '', category: activeCategory, item_type: ITEM_TYPES[activeCategory][0],
       on_hand: '', unit: '', unit_cost: '', par: '',
-      on_menu: false, distributor_id: '', notes: '', wine_type: ''
+      on_menu: false, distributor_id: '', notes: '', wine_type: '', item_number: ''
     })
     setEditingId(null)
     setShowAddForm(true)
@@ -84,7 +84,8 @@ export default function FOHInventoryDatabase() {
       name: item.name, category: item.category, item_type: item.item_type || 'bottle',
       on_hand: item.on_hand, unit: item.unit || '', unit_cost: item.unit_cost,
       par: item.par, on_menu: item.on_menu || false,
-      distributor_id: item.distributor_id || '', notes: item.notes || '', wine_type: item.wine_type || ''
+      distributor_id: item.distributor_id || '', notes: item.notes || '',
+      wine_type: item.wine_type || '', item_number: item.item_number || ''
     })
     setEditingId(item.id)
     setShowAddForm(false)
@@ -104,7 +105,9 @@ export default function FOHInventoryDatabase() {
       on_hand: parseFloat(form.on_hand) || 0, unit: form.unit,
       unit_cost: parseFloat(form.unit_cost) || 0, par: parseFloat(form.par) || 0,
       on_menu: form.on_menu, distributor_id: form.distributor_id || null,
-      notes: form.notes, wine_type: form.wine_type || null, area: 'foh', user_id: session.user.id
+      notes: form.notes, wine_type: form.wine_type || null,
+      item_number: form.item_number || null,
+      area: 'foh', user_id: session.user.id
     }
     if (editingId) {
       await supabase.from('inventory_items').update(payload).eq('id', editingId)
@@ -134,10 +137,10 @@ export default function FOHInventoryDatabase() {
   }
 
   const exportCSV = () => {
-    const rows = [['Name', 'Category', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Notes']]
+    const rows = [['Item Number', 'Name', 'Category', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Notes']]
     catItems.forEach(i => {
       const dist = distributors.find(d => d.id === i.distributor_id)
-      rows.push([i.name, i.category, i.item_type, i.on_hand, i.unit || '', i.unit_cost, i.par, i.on_menu ? 'Yes' : 'No', dist?.name || '', i.notes || ''])
+      rows.push([i.item_number || '', i.name, i.category, i.item_type, i.on_hand, i.unit || '', i.unit_cost, i.par, i.on_menu ? 'Yes' : 'No', dist?.name || '', i.notes || ''])
     })
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const a = document.createElement('a')
@@ -148,12 +151,12 @@ export default function FOHInventoryDatabase() {
 
   const downloadTemplate = () => {
     const examples = {
-      liquor: [['Buffalo Trace Bourbon', 'liquor', 'bottle', '12', 'bottle', '35.10', '6', 'Yes', 'Republic National', ''], ["Tito's Vodka", 'liquor', 'bottle', '8', 'bottle', '29.99', '8', 'Yes', 'Southern Glazers', '']],
-      beer: [["Hamm's 24pk", 'beer', 'can', '4', 'case', '18.00', '2', 'Yes', 'Republic National', ''], ['High Life Keg', 'beer', 'keg', '1', 'keg', '85.00', '1', 'Yes', 'Republic National', '']],
-      wine: [['Field Recordings Chenin Blanc', 'wine', 'bottle', '6', 'bottle', '14.00', '3', 'Yes', 'Southern Glazers', '']],
-      misc: [['Angostura Bitters', 'misc', 'bottle', '4', 'bottle', '8.99', '2', 'No', '', '']],
+      liquor: [['083126', 'Buffalo Trace Bourbon', 'liquor', 'bottle', '12', 'bottle', '35.10', '6', 'Yes', 'Republic National', ''], ['', "Tito's Vodka", 'liquor', 'bottle', '8', 'bottle', '29.99', '8', 'Yes', 'Southern Glazers', '']],
+      beer: [['', "Hamm's 24pk", 'beer', 'can', '4', 'case', '18.00', '2', 'Yes', 'Republic National', ''], ['', 'High Life Keg', 'beer', 'keg', '1', 'keg', '85.00', '1', 'Yes', 'Republic National', '']],
+      wine: [['', 'Field Recordings Chenin Blanc', 'wine', 'bottle', '6', 'bottle', '14.00', '3', 'Yes', 'Southern Glazers', '']],
+      misc: [['', 'Angostura Bitters', 'misc', 'bottle', '4', 'bottle', '8.99', '2', 'No', '', '']],
     }
-    const rows = [['Name', 'Category', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Notes'], ...(examples[activeCategory] || [])]
+    const rows = [['Item Number', 'Name', 'Category', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Notes'], ...(examples[activeCategory] || [])]
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
@@ -169,6 +172,7 @@ export default function FOHInventoryDatabase() {
       const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l && l.replace(/,/g, '').trim())
       if (lines.length < 2) return
       const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
+      const ini = hdr.findIndex(h => h.includes('item number') || h.includes('sku'))
       const ni = hdr.findIndex(h => h.includes('name'))
       const ti = hdr.findIndex(h => h.includes('type'))
       const ohi = hdr.findIndex(h => h.includes('on hand') || h.includes('onhand'))
@@ -181,21 +185,24 @@ export default function FOHInventoryDatabase() {
       const parsed = []
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
-        const name = (cols[ni >= 0 ? ni : 0] || '').trim()
-        if (!name || name.toLowerCase() === 'name' || name.toLowerCase() === 'product name') continue
-        const distName = cols[di >= 0 ? di : 8] || ''
+        const name = (cols[ni >= 0 ? ni : 1] || '').trim()
+        if (!name || name.toLowerCase() === 'name') continue
+        const distName = cols[di >= 0 ? di : 9] || ''
         const dist = distributors.find(d => d.name.toLowerCase() === distName.toLowerCase())
         parsed.push({
-          name, category: activeCategory,
-          item_type: cols[ti >= 0 ? ti : 2] || ITEM_TYPES[activeCategory][0],
-          on_hand: parseFloat(cols[ohi >= 0 ? ohi : 3]) || 0,
-          unit: cols[ui >= 0 ? ui : 4] || '',
-          unit_cost: parseFloat(cols[uci >= 0 ? uci : 5]) || 0,
-          par: parseFloat(cols[pi >= 0 ? pi : 6]) || 0,
-          on_menu: (cols[omi >= 0 ? omi : 7] || '').toLowerCase() === 'yes',
+          item_number: cols[ini >= 0 ? ini : 0] || '',
+          name,
+          category: activeCategory,
+          item_type: cols[ti >= 0 ? ti : 3] || ITEM_TYPES[activeCategory][0],
+          on_hand: parseFloat(cols[ohi >= 0 ? ohi : 4]) || 0,
+          unit: cols[ui >= 0 ? ui : 5] || '',
+          unit_cost: parseFloat(cols[uci >= 0 ? uci : 6]) || 0,
+          par: parseFloat(cols[pi >= 0 ? pi : 7]) || 0,
+          on_menu: (cols[omi >= 0 ? omi : 8] || '').toLowerCase() === 'yes',
           distributor_id: dist?.id || null,
-          distName, distMatched: !distName || !!dist,
-          notes: cols[noi >= 0 ? noi : 9] || '',
+          distName,
+          distMatched: !distName || !!dist,
+          notes: cols[noi >= 0 ? noi : 10] || '',
         })
       }
       setImportPreview(parsed)
@@ -214,6 +221,7 @@ export default function FOHInventoryDatabase() {
       const { data: insertedItems, error: insertError } = await supabase
         .from('inventory_items')
         .insert(toInsert.map(r => ({
+          item_number: r.item_number || null,
           name: r.name.trim(), category: r.category,
           item_type: VALID_TYPES.includes((r.item_type || '').toLowerCase()) ? r.item_type.toLowerCase() : 'unit',
           on_hand: r.on_hand, unit: r.unit, unit_cost: r.unit_cost, par: r.par,
@@ -235,8 +243,6 @@ export default function FOHInventoryDatabase() {
     setImportPreview(null)
     setImporting(false)
   }
-
-  
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -305,7 +311,7 @@ export default function FOHInventoryDatabase() {
             </div>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
               <thead>
-                <tr>{['Name', 'Type', 'On Hand', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Status'].map((h, i) => (
+                <tr>{['Item #', 'Name', 'Type', 'On Hand', 'Unit Cost', 'Par', 'On Menu', 'Distributor', 'Status'].map((h, i) => (
                   <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                 ))}</tr>
               </thead>
@@ -314,6 +320,7 @@ export default function FOHInventoryDatabase() {
                   const exists = catItems.map(item => item.name.toLowerCase()).includes(r.name.toLowerCase())
                   return (
                     <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                      <td style={{ padding: '7px 10px', color: '#aaa', fontSize: '11px' }}>{r.item_number || '--'}</td>
                       <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
                       <td style={{ padding: '7px 10px', color: '#666' }}>{r.item_type}</td>
                       <td style={{ padding: '7px 10px', color: '#666' }}>{r.on_hand}</td>
@@ -345,6 +352,10 @@ export default function FOHInventoryDatabase() {
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={labelStyle}>Item Name</label>
                 <input style={inputStyle} placeholder="Buffalo Trace Bourbon" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+              <div style={{ gridColumn: '1/-1' }}>
+                <label style={labelStyle}>Item Number / SKU</label>
+                <input style={inputStyle} placeholder="Distributor item number or SKU..." value={form.item_number} onChange={e => setForm(f => ({ ...f, item_number: e.target.value }))} />
               </div>
               <div>
                 <label style={labelStyle}>Category</label>
@@ -432,8 +443,8 @@ export default function FOHInventoryDatabase() {
             <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr>{['Item', 'Type', 'On Hand', 'Unit Cost', 'Value', 'Par', 'Variance', 'On Menu', ''].map((h, i) => (
-                    <th key={i} style={{ textAlign: i > 1 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                  <tr>{['Item', 'Item #', 'Type', 'On Hand', 'Unit Cost', 'Value', 'Par', 'Variance', 'On Menu', ''].map((h, i) => (
+                    <th key={i} style={{ textAlign: i > 2 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                   ))}</tr>
                 </thead>
                 <tbody>
@@ -445,6 +456,7 @@ export default function FOHInventoryDatabase() {
                       <>
                         <tr key={item.id} style={{ borderBottom: isEditing ? 'none' : '1px solid #f5f5f5', background: isEditing ? '#fffdf0' : 'transparent' }}>
                           <td style={{ padding: '10px 12px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{item.name}</td>
+                          <td style={{ padding: '10px 12px', color: '#aaa', fontSize: '12px' }}>{item.item_number || '--'}</td>
                           <td style={{ padding: '10px 12px' }}>
                             <span style={{ background: '#f5f5f3', color: '#555', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{item.item_type}</span>
                           </td>
@@ -473,88 +485,92 @@ export default function FOHInventoryDatabase() {
                           </td>
                         </tr>
                         {isEditing && (
-  <tr>
-    <td colSpan={9} style={{ padding: '0' }}>
-      <div style={{ background: '#fafafa', borderLeft: '3px solid #F5B800', padding: '20px 16px' }}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-          <div style={{ gridColumn: '1/-1' }}>
-            <label style={labelStyle}>Item Name</label>
-            <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-          </div>
-          <div>
-            <label style={labelStyle}>Category</label>
-            <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
-              {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={labelStyle}>Item Type</label>
-            <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
-              {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-            </select>
-          </div>
-          {form.category === 'wine' && (
-            <div>
-              <label style={labelStyle}>Wine Type</label>
-              <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
-                <option value="">-- Select --</option>
-                <option value="red">Red</option>
-                <option value="white">White</option>
-                <option value="bubbles">Bubbles</option>
-                <option value="rose">Rosé</option>
-                <option value="orange">Orange</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-          )}
-          <div>
-            <label style={labelStyle}>On Hand</label>
-            <input style={inputStyle} type="number" step="0.1" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
-          </div>
-          <div>
-            <label style={labelStyle}>Unit</label>
-            <input style={inputStyle} value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
-          </div>
-          <div>
-            <label style={labelStyle}>Unit Cost ($)</label>
-            <input style={inputStyle} type="number" step="0.01" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
-          </div>
-          <div>
-            <label style={labelStyle}>Par</label>
-            <input style={inputStyle} type="number" step="0.1" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
-          </div>
-          <div>
-            <label style={labelStyle}>Distributor</label>
-            <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
-              <option value="">-- Select --</option>
-              {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          </div>
-          <div style={{ gridColumn: '1/-1' }}>
-            <label style={labelStyle}>Notes</label>
-            <input style={inputStyle} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-          </div>
-          <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
-            <input type="checkbox" id="onMenuInline" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-            <label htmlFor="onMenuInline" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
-          </div>
-        </div>
-        {form.on_hand > 0 && form.unit_cost > 0 && (
-          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '24px' }}>
-            <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>On Hand Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
-            {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button onClick={cancelEdit} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-          <button onClick={saveItem} disabled={saving} style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
-            {saving ? 'Saving...' : 'Save Item'}
-          </button>
-        </div>
-      </div>
-    </td>
-  </tr>
-)}
+                          <tr>
+                            <td colSpan={10} style={{ padding: '0' }}>
+                              <div style={{ background: '#fafafa', borderLeft: '3px solid #F5B800', padding: '20px 16px' }}>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                                  <div style={{ gridColumn: '1/-1' }}>
+                                    <label style={labelStyle}>Item Name</label>
+                                    <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+                                  </div>
+                                  <div style={{ gridColumn: '1/-1' }}>
+                                    <label style={labelStyle}>Item Number / SKU</label>
+                                    <input style={inputStyle} placeholder="Distributor item number or SKU..." value={form.item_number} onChange={e => setForm(f => ({ ...f, item_number: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Category</label>
+                                    <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
+                                      {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Item Type</label>
+                                    <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
+                                      {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+                                    </select>
+                                  </div>
+                                  {form.category === 'wine' && (
+                                    <div>
+                                      <label style={labelStyle}>Wine Type</label>
+                                      <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
+                                        <option value="">-- Select --</option>
+                                        <option value="red">Red</option>
+                                        <option value="white">White</option>
+                                        <option value="bubbles">Bubbles</option>
+                                        <option value="rose">Rosé</option>
+                                        <option value="orange">Orange</option>
+                                        <option value="other">Other</option>
+                                      </select>
+                                    </div>
+                                  )}
+                                  <div>
+                                    <label style={labelStyle}>On Hand</label>
+                                    <input style={inputStyle} type="number" step="0.1" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Unit</label>
+                                    <input style={inputStyle} value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Unit Cost ($)</label>
+                                    <input style={inputStyle} type="number" step="0.01" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Par</label>
+                                    <input style={inputStyle} type="number" step="0.1" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+                                  </div>
+                                  <div>
+                                    <label style={labelStyle}>Distributor</label>
+                                    <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
+                                      <option value="">-- Select --</option>
+                                      {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                                    </select>
+                                  </div>
+                                  <div style={{ gridColumn: '1/-1' }}>
+                                    <label style={labelStyle}>Notes</label>
+                                    <input style={inputStyle} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+                                  </div>
+                                  <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
+                                    <input type="checkbox" id="onMenuInline" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                                    <label htmlFor="onMenuInline" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
+                                  </div>
+                                </div>
+                                {form.on_hand > 0 && form.unit_cost > 0 && (
+                                  <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '24px' }}>
+                                    <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>On Hand Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
+                                    {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
+                                  </div>
+                                )}
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                  <button onClick={cancelEdit} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+                                  <button onClick={saveItem} disabled={saving} style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                                    {saving ? 'Saving...' : 'Save Item'}
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
                       </>
                     )
                   })}
