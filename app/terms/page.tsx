@@ -17,7 +17,7 @@ export default function TermsOfService() {
       <div style={{ maxWidth: '760px', margin: '0 auto', padding: '48px 24px 80px' }}>
 
         <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#000', marginBottom: '8px' }}>Terms of Service</h1>
-        <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '40px' }}>Effective Date: June 2, 2025 · Inventory Sux LLC</p>
+        <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '40px' }}>Effective Date: June 2, 2026 · Inventory Sux LLC</p>
 
         <div style={{ fontSize: '15px', color: '#333', lineHeight: '1.8' }}>
 
