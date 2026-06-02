@@ -236,89 +236,7 @@ export default function FOHInventoryDatabase() {
     setImporting(false)
   }
 
-  const InlineEditForm = () => (
-    <tr>
-      <td colSpan={9} style={{ padding: '0' }}>
-        <div style={{ background: '#fafafa', borderLeft: '3px solid #F5B800', padding: '20px 16px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={labelStyle}>Item Name</label>
-              <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div>
-              <label style={labelStyle}>Category</label>
-              <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
-                {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={labelStyle}>Item Type</label>
-              <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
-                {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-              </select>
-            </div>
-            {form.category === 'wine' && (
-              <div>
-                <label style={labelStyle}>Wine Type</label>
-                <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
-                  <option value="">-- Select --</option>
-                  <option value="red">Red</option>
-                  <option value="white">White</option>
-                  <option value="bubbles">Bubbles</option>
-                  <option value="rose">Rosé</option>
-                  <option value="orange">Orange</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-            )}
-            <div>
-              <label style={labelStyle}>On Hand</label>
-              <input style={inputStyle} type="number" step="0.1" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
-            </div>
-            <div>
-              <label style={labelStyle}>Unit</label>
-              <input style={inputStyle} value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
-            </div>
-            <div>
-              <label style={labelStyle}>Unit Cost ($)</label>
-              <input style={inputStyle} type="number" step="0.01" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
-            </div>
-            <div>
-              <label style={labelStyle}>Par</label>
-              <input style={inputStyle} type="number" step="0.1" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
-            </div>
-            <div>
-              <label style={labelStyle}>Distributor</label>
-              <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
-                <option value="">-- Select --</option>
-                {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-              </select>
-            </div>
-            <div style={{ gridColumn: '1/-1' }}>
-              <label style={labelStyle}>Notes</label>
-              <input style={inputStyle} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-            </div>
-            <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
-              <input type="checkbox" id="onMenuInline" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-              <label htmlFor="onMenuInline" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
-            </div>
-          </div>
-          {form.on_hand > 0 && form.unit_cost > 0 && (
-            <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '24px' }}>
-              <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>On Hand Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
-              {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button onClick={cancelEdit} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-            <button onClick={saveItem} disabled={saving} style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
-              {saving ? 'Saving...' : 'Save Item'}
-            </button>
-          </div>
-        </div>
-      </td>
-    </tr>
-  )
+  
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -554,7 +472,89 @@ export default function FOHInventoryDatabase() {
                             </button>
                           </td>
                         </tr>
-                        {isEditing && <InlineEditForm />}
+                        {isEditing && (
+  <tr>
+    <td colSpan={9} style={{ padding: '0' }}>
+      <div style={{ background: '#fafafa', borderLeft: '3px solid #F5B800', padding: '20px 16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={labelStyle}>Item Name</label>
+            <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          </div>
+          <div>
+            <label style={labelStyle}>Category</label>
+            <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
+              {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={labelStyle}>Item Type</label>
+            <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
+              {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+            </select>
+          </div>
+          {form.category === 'wine' && (
+            <div>
+              <label style={labelStyle}>Wine Type</label>
+              <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
+                <option value="">-- Select --</option>
+                <option value="red">Red</option>
+                <option value="white">White</option>
+                <option value="bubbles">Bubbles</option>
+                <option value="rose">Rosé</option>
+                <option value="orange">Orange</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+          )}
+          <div>
+            <label style={labelStyle}>On Hand</label>
+            <input style={inputStyle} type="number" step="0.1" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
+          </div>
+          <div>
+            <label style={labelStyle}>Unit</label>
+            <input style={inputStyle} value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+          </div>
+          <div>
+            <label style={labelStyle}>Unit Cost ($)</label>
+            <input style={inputStyle} type="number" step="0.01" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
+          </div>
+          <div>
+            <label style={labelStyle}>Par</label>
+            <input style={inputStyle} type="number" step="0.1" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+          </div>
+          <div>
+            <label style={labelStyle}>Distributor</label>
+            <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
+              <option value="">-- Select --</option>
+              {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+            </select>
+          </div>
+          <div style={{ gridColumn: '1/-1' }}>
+            <label style={labelStyle}>Notes</label>
+            <input style={inputStyle} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+          </div>
+          <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
+            <input type="checkbox" id="onMenuInline" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+            <label htmlFor="onMenuInline" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
+          </div>
+        </div>
+        {form.on_hand > 0 && form.unit_cost > 0 && (
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '24px' }}>
+            <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>On Hand Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
+            {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button onClick={cancelEdit} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+          <button onClick={saveItem} disabled={saving} style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+            {saving ? 'Saving...' : 'Save Item'}
+          </button>
+        </div>
+      </div>
+    </td>
+  </tr>
+)}
                       </>
                     )
                   })}
