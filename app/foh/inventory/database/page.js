@@ -9,7 +9,7 @@ export default function FOHInventoryDatabase() {
   const [distributors, setDistributors] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeCategory, setActiveCategory] = useState('liquor')
-  const [showForm, setShowForm] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -42,6 +42,10 @@ export default function FOHInventoryDatabase() {
 
   const VALID_TYPES = ['bottle', 'keg', 'can', 'case', 'weight', 'volume', 'unit']
 
+  const inputStyle = { width: '100%', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
+  const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -65,24 +69,30 @@ export default function FOHInventoryDatabase() {
   const catItems = items.filter(i => i.category === activeCategory)
   const totalValue = catItems.reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
 
-  const openForm = (item = null) => {
-    if (item) {
-      setForm({
-        name: item.name, category: item.category, item_type: item.item_type || 'bottle',
-        on_hand: item.on_hand, unit: item.unit || '', unit_cost: item.unit_cost,
-        par: item.par, on_menu: item.on_menu || false,
-        distributor_id: item.distributor_id || '', notes: item.notes || '', wine_type: item.wine_type || ''
-      })
-      setEditingId(item.id)
-    } else {
-      setForm({
-        name: '', category: activeCategory, item_type: ITEM_TYPES[activeCategory][0],
-        on_hand: '', unit: '', unit_cost: '', par: '',
-        on_menu: false, distributor_id: '', notes: '', wine_type: ''
-      })
-      setEditingId(null)
-    }
-    setShowForm(true)
+  const openAddForm = () => {
+    setForm({
+      name: '', category: activeCategory, item_type: ITEM_TYPES[activeCategory][0],
+      on_hand: '', unit: '', unit_cost: '', par: '',
+      on_menu: false, distributor_id: '', notes: '', wine_type: ''
+    })
+    setEditingId(null)
+    setShowAddForm(true)
+  }
+
+  const openEditForm = (item) => {
+    setForm({
+      name: item.name, category: item.category, item_type: item.item_type || 'bottle',
+      on_hand: item.on_hand, unit: item.unit || '', unit_cost: item.unit_cost,
+      par: item.par, on_menu: item.on_menu || false,
+      distributor_id: item.distributor_id || '', notes: item.notes || '', wine_type: item.wine_type || ''
+    })
+    setEditingId(item.id)
+    setShowAddForm(false)
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setShowAddForm(false)
   }
 
   const saveItem = async () => {
@@ -118,7 +128,8 @@ export default function FOHInventoryDatabase() {
       await supabase.from('inventory_items').insert(payload)
     }
     await loadData(session.user.id)
-    setShowForm(false)
+    setEditingId(null)
+    setShowAddForm(false)
     setSaving(false)
   }
 
@@ -155,10 +166,7 @@ export default function FOHInventoryDatabase() {
     if (!file) return
     const reader = new FileReader()
     reader.onload = (ev) => {
-      const lines = ev.target.result
-        .split(/\r?\n/)
-        .map(l => l.trim())
-        .filter(l => l && l.replace(/,/g, '').trim())
+      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l && l.replace(/,/g, '').trim())
       if (lines.length < 2) return
       const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
       const ni = hdr.findIndex(h => h.includes('name'))
@@ -178,8 +186,7 @@ export default function FOHInventoryDatabase() {
         const distName = cols[di >= 0 ? di : 8] || ''
         const dist = distributors.find(d => d.name.toLowerCase() === distName.toLowerCase())
         parsed.push({
-          name,
-          category: activeCategory,
+          name, category: activeCategory,
           item_type: cols[ti >= 0 ? ti : 2] || ITEM_TYPES[activeCategory][0],
           on_hand: parseFloat(cols[ohi >= 0 ? ohi : 3]) || 0,
           unit: cols[ui >= 0 ? ui : 4] || '',
@@ -187,8 +194,7 @@ export default function FOHInventoryDatabase() {
           par: parseFloat(cols[pi >= 0 ? pi : 6]) || 0,
           on_menu: (cols[omi >= 0 ? omi : 7] || '').toLowerCase() === 'yes',
           distributor_id: dist?.id || null,
-          distName,
-          distMatched: !distName || !!dist,
+          distName, distMatched: !distName || !!dist,
           notes: cols[noi >= 0 ? noi : 9] || '',
         })
       }
@@ -203,71 +209,116 @@ export default function FOHInventoryDatabase() {
     setImporting(true)
     const { data: { session } } = await supabase.auth.getSession()
     const existingNames = catItems.map(i => i.name.toLowerCase())
-    const toInsert = importPreview.filter(r =>
-      r.name &&
-      r.name.trim() &&
-      !existingNames.includes(r.name.toLowerCase().trim())
-    )
-
+    const toInsert = importPreview.filter(r => r.name && r.name.trim() && !existingNames.includes(r.name.toLowerCase().trim()))
     if (toInsert.length > 0) {
       const { data: insertedItems, error: insertError } = await supabase
         .from('inventory_items')
         .insert(toInsert.map(r => ({
-          name: r.name.trim(),
-          category: r.category,
-          item_type: VALID_TYPES.includes((r.item_type || '').toLowerCase())
-            ? r.item_type.toLowerCase()
-            : 'unit',
-          on_hand: r.on_hand,
-          unit: r.unit,
-          unit_cost: r.unit_cost,
-          par: r.par,
-          on_menu: r.on_menu,
-          distributor_id: r.distributor_id,
-          notes: r.notes,
-          area: 'foh',
-          user_id: session.user.id
-        })))
-        .select()
-
-      if (insertError) {
-        console.error('Import error:', insertError)
-        alert('Import failed: ' + insertError.message)
-        setImporting(false)
-        return
+          name: r.name.trim(), category: r.category,
+          item_type: VALID_TYPES.includes((r.item_type || '').toLowerCase()) ? r.item_type.toLowerCase() : 'unit',
+          on_hand: r.on_hand, unit: r.unit, unit_cost: r.unit_cost, par: r.par,
+          on_menu: r.on_menu, distributor_id: r.distributor_id, notes: r.notes,
+          area: 'foh', user_id: session.user.id
+        }))).select()
+      if (insertError) { alert('Import failed: ' + insertError.message); setImporting(false); return }
+      if (insertedItems?.length > 0) {
+        const historyRows = insertedItems.filter(item => item.on_hand > 0).map(item => ({
+          user_id: session.user.id, inventory_item_id: item.id, item_name: item.name,
+          category: item.category, area: 'foh', event_type: 'csv_import',
+          quantity_before: 0, quantity_change: item.on_hand, quantity_after: item.on_hand,
+          unit_cost_at_time: item.unit_cost, total_value_at_time: item.on_hand * item.unit_cost
+        }))
+        if (historyRows.length > 0) await supabase.from('inventory_history').insert(historyRows)
       }
-
-      if (insertedItems && insertedItems.length > 0) {
-        const historyRows = insertedItems
-          .filter(item => item.on_hand > 0)
-          .map(item => ({
-            user_id: session.user.id,
-            inventory_item_id: item.id,
-            item_name: item.name,
-            category: item.category,
-            area: 'foh',
-            event_type: 'csv_import',
-            quantity_before: 0,
-            quantity_change: item.on_hand,
-            quantity_after: item.on_hand,
-            unit_cost_at_time: item.unit_cost,
-            total_value_at_time: item.on_hand * item.unit_cost
-          }))
-        if (historyRows.length > 0) {
-          await supabase.from('inventory_history').insert(historyRows)
-        }
-      }
-
       await loadData(session.user.id)
     }
-
     setImportPreview(null)
     setImporting(false)
   }
 
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
-  const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
-  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
+  const InlineEditForm = () => (
+    <tr>
+      <td colSpan={9} style={{ padding: '0' }}>
+        <div style={{ background: '#fafafa', borderLeft: '3px solid #F5B800', padding: '20px 16px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={labelStyle}>Item Name</label>
+              <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Category</label>
+              <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
+                {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Item Type</label>
+              <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
+                {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+              </select>
+            </div>
+            {form.category === 'wine' && (
+              <div>
+                <label style={labelStyle}>Wine Type</label>
+                <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
+                  <option value="">-- Select --</option>
+                  <option value="red">Red</option>
+                  <option value="white">White</option>
+                  <option value="bubbles">Bubbles</option>
+                  <option value="rose">Rosé</option>
+                  <option value="orange">Orange</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            )}
+            <div>
+              <label style={labelStyle}>On Hand</label>
+              <input style={inputStyle} type="number" step="0.1" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Unit</label>
+              <input style={inputStyle} value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Unit Cost ($)</label>
+              <input style={inputStyle} type="number" step="0.01" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Par</label>
+              <input style={inputStyle} type="number" step="0.1" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+            </div>
+            <div>
+              <label style={labelStyle}>Distributor</label>
+              <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
+                <option value="">-- Select --</option>
+                {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            </div>
+            <div style={{ gridColumn: '1/-1' }}>
+              <label style={labelStyle}>Notes</label>
+              <input style={inputStyle} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+            </div>
+            <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
+              <input type="checkbox" id="onMenuInline" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+              <label htmlFor="onMenuInline" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
+            </div>
+          </div>
+          {form.on_hand > 0 && form.unit_cost > 0 && (
+            <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '24px' }}>
+              <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>On Hand Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
+              {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button onClick={cancelEdit} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+            <button onClick={saveItem} disabled={saving} style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              {saving ? 'Saving...' : 'Save Item'}
+            </button>
+          </div>
+        </div>
+      </td>
+    </tr>
+  )
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -299,9 +350,7 @@ export default function FOHInventoryDatabase() {
               ↑ Import
               <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
             </label>
-            <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-              + Add Item
-            </button>
+            <button onClick={openAddForm} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>+ Add Item</button>
           </div>
         </div>
 
@@ -310,7 +359,7 @@ export default function FOHInventoryDatabase() {
             const count = items.filter(i => i.category === c.key).length
             const val = items.filter(i => i.category === c.key).reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
             return (
-              <div key={c.key} onClick={() => { setActiveCategory(c.key); setImportPreview(null) }}
+              <div key={c.key} onClick={() => { setActiveCategory(c.key); setImportPreview(null); cancelEdit() }}
                 style={{ background: '#fff', border: `2px solid ${activeCategory === c.key ? '#F5B800' : '#e8e8e8'}`, borderRadius: '12px', padding: '16px', cursor: 'pointer', textAlign: 'center' }}>
                 <div style={{ fontSize: '28px', marginBottom: '6px' }}>{c.icon}</div>
                 <div style={{ fontSize: '14px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
@@ -371,9 +420,9 @@ export default function FOHInventoryDatabase() {
           </div>
         )}
 
-        {showForm && (
+        {showAddForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Item' : 'Add Item'}</h3>
+            <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>Add Item</h3>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={labelStyle}>Item Name</label>
@@ -433,10 +482,8 @@ export default function FOHInventoryDatabase() {
                 <input style={inputStyle} placeholder="Any additional notes..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
               </div>
               <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '12px', background: '#fafafa', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
-                <input type="checkbox" id="onMenu" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
-                <label htmlFor="onMenu" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>
-                  On Menu — include this item on the order sheet
-                </label>
+                <input type="checkbox" id="onMenuAdd" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
+                <label htmlFor="onMenuAdd" style={{ fontSize: '13px', color: '#000', cursor: 'pointer' }}>On Menu — include this item on the order sheet</label>
               </div>
             </div>
             {form.on_hand > 0 && form.unit_cost > 0 && (
@@ -446,7 +493,7 @@ export default function FOHInventoryDatabase() {
               </div>
             )}
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={cancelEdit} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={saveItem} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : 'Save Item'}
               </button>
@@ -475,32 +522,40 @@ export default function FOHInventoryDatabase() {
                   {catItems.map(item => {
                     const variance = item.on_hand - item.par
                     const isLow = item.par > 0 && item.on_hand < item.par
+                    const isEditing = editingId === item.id
                     return (
-                      <tr key={item.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
-                        <td style={{ padding: '10px 12px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{item.name}</td>
-                        <td style={{ padding: '10px 12px' }}>
-                          <span style={{ background: '#f5f5f3', color: '#555', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{item.item_type}</span>
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600', color: isLow ? '#E24B4A' : '#000', fontSize: '13px' }}>{Number(item.on_hand).toFixed(1)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#555', fontSize: '12px' }}>{fmt(item.unit_cost)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#000', fontSize: '13px' }}>{fmt(item.on_hand * item.unit_cost)}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', color: '#aaa', fontSize: '12px' }}>{item.par > 0 ? Number(item.par).toFixed(1) : '--'}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '12px' }}>
-                          {item.par > 0 ? (
-                            <span style={{ color: variance >= 0 ? '#3B6D11' : '#E24B4A', fontWeight: '500' }}>
-                              {variance >= 0 ? '+' : ''}{variance.toFixed(1)}
-                            </span>
-                          ) : <span style={{ color: '#aaa' }}>--</span>}
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                          {item.on_menu
-                            ? <span style={{ background: '#EAF3DE', color: '#27500A', border: '1px solid #97C459', borderRadius: '10px', fontSize: '10px', padding: '2px 8px' }}>On Menu</span>
-                            : <span style={{ background: '#f5f5f3', color: '#aaa', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '10px', padding: '2px 8px' }}>Off Menu</span>}
-                        </td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right' }}>
-                          <button onClick={() => openForm(item)} style={{ background: '#333', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>Edit</button>
-                        </td>
-                      </tr>
+                      <>
+                        <tr key={item.id} style={{ borderBottom: isEditing ? 'none' : '1px solid #f5f5f5', background: isEditing ? '#fffdf0' : 'transparent' }}>
+                          <td style={{ padding: '10px 12px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{item.name}</td>
+                          <td style={{ padding: '10px 12px' }}>
+                            <span style={{ background: '#f5f5f3', color: '#555', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{item.item_type}</span>
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '600', color: isLow ? '#E24B4A' : '#000', fontSize: '13px' }}>{Number(item.on_hand).toFixed(1)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', color: '#555', fontSize: '12px' }}>{fmt(item.unit_cost)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontWeight: '500', color: '#000', fontSize: '13px' }}>{fmt(item.on_hand * item.unit_cost)}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', color: '#aaa', fontSize: '12px' }}>{item.par > 0 ? Number(item.par).toFixed(1) : '--'}</td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right', fontSize: '12px' }}>
+                            {item.par > 0 ? (
+                              <span style={{ color: variance >= 0 ? '#3B6D11' : '#E24B4A', fontWeight: '500' }}>
+                                {variance >= 0 ? '+' : ''}{variance.toFixed(1)}
+                              </span>
+                            ) : <span style={{ color: '#aaa' }}>--</span>}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                            {item.on_menu
+                              ? <span style={{ background: '#EAF3DE', color: '#27500A', border: '1px solid #97C459', borderRadius: '10px', fontSize: '10px', padding: '2px 8px' }}>On Menu</span>
+                              : <span style={{ background: '#f5f5f3', color: '#aaa', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '10px', padding: '2px 8px' }}>Off Menu</span>}
+                          </td>
+                          <td style={{ padding: '10px 12px', textAlign: 'right' }}>
+                            <button
+                              onClick={() => isEditing ? cancelEdit() : openEditForm(item)}
+                              style={{ background: isEditing ? '#e8e8e8' : '#333', border: 'none', color: isEditing ? '#555' : '#fff', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+                              {isEditing ? 'Close' : 'Edit'}
+                            </button>
+                          </td>
+                        </tr>
+                        {isEditing && <InlineEditForm />}
+                      </>
                     )
                   })}
                 </tbody>
