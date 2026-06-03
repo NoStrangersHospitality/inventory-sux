@@ -88,19 +88,32 @@ export default function BOHOrder() {
     setStep('sheet')
   }
 
-  const updateRow = (vendorName, idx, field, val) => {
-    setOrderRows(prev => {
-      const next = { ...prev }
-      const rows = [...next[vendorName]]
-      rows[idx] = { ...rows[idx], [field]: val }
-      const row = rows[idx]
-      const par = field === 'par' ? val : (row.par || 0)
-      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
-      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
-      next[vendorName] = rows
-      return next
-    })
+  const updateRow = async (vendorName, idx, field, val) => {
+  setOrderRows(prev => {
+    const next = { ...prev }
+    const rows = [...next[vendorName]]
+    rows[idx] = { ...rows[idx], [field]: val }
+    const row = rows[idx]
+    const par = field === 'par' ? val : (row.par || 0)
+    const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+    rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
+    next[vendorName] = rows
+    return next
+  })
+
+  if (field === 'par') {
+    const { data: { session } } = await supabase.auth.getSession()
+    const rows = orderRows[vendorName]
+    const row = rows[idx]
+    if (row?.id) {
+      await supabase
+        .from('inventory_items')
+        .update({ par: parseFloat(val) || 0 })
+        .eq('id', row.id)
+        .eq('user_id', session.user.id)
+    }
   }
+}
 
   const buildRecap = () => {
     const rd = {}

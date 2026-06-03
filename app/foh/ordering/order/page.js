@@ -83,19 +83,33 @@ export default function Order() {
     setStep('sheet')
   }
 
-  const updateRow = (distName, idx, field, val) => {
-    setOrderRows(prev => {
-      const next = { ...prev }
-      const rows = [...next[distName]]
-      rows[idx] = { ...rows[idx], [field]: val }
-      const row = rows[idx]
-      const par = field === 'par' ? val : (row.par || 0)
-      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
-      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
-      next[distName] = rows
-      return next
-    })
+  const updateRow = async (distName, idx, field, val) => {
+  setOrderRows(prev => {
+    const next = { ...prev }
+    const rows = [...next[distName]]
+    rows[idx] = { ...rows[idx], [field]: val }
+    const row = rows[idx]
+    const par = field === 'par' ? val : (row.par || 0)
+    const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+    rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
+    next[distName] = rows
+    return next
+  })
+
+  // Persist par changes back to inventory_items
+  if (field === 'par') {
+    const { data: { session } } = await supabase.auth.getSession()
+    const rows = orderRows[distName]
+    const row = rows[idx]
+    if (row?.id) {
+      await supabase
+        .from('inventory_items')
+        .update({ par: parseFloat(val) || 0 })
+        .eq('id', row.id)
+        .eq('user_id', session.user.id)
+    }
   }
+}
 
   const buildRecap = () => {
     const rd = {}
