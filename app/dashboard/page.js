@@ -13,12 +13,20 @@ export default function Dashboard() {
   const [unreadCount, setUnreadCount] = useState(0)
   const [pendingOrders, setPendingOrders] = useState([])
   const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   const loadReplies = async (userId) => {
     const { data } = await supabase
@@ -42,7 +50,6 @@ export default function Dashboard() {
       setProfile(profile)
       await loadReplies(session.user.id)
 
-      // Load pending orders for delivery banner
       const { data: pending } = await supabase
         .from('orders')
         .select('*, order_lines(count)')
@@ -51,7 +58,6 @@ export default function Dashboard() {
         .order('submitted_at', { ascending: true })
       setPendingOrders(pending || [])
 
-      // Check session dismissal
       const dismissed = sessionStorage.getItem('delivery_banner_dismissed')
       setBannerDismissed(!!dismissed)
 
@@ -103,9 +109,7 @@ export default function Dashboard() {
   }
 
   const isOverdue = (order) => {
-    const submitted = new Date(order.submitted_at)
-    const now = new Date()
-    const days = (now - submitted) / (1000 * 60 * 60 * 24)
+    const days = (new Date() - new Date(order.submitted_at)) / (1000 * 60 * 60 * 24)
     return days >= 7
   }
 
@@ -124,16 +128,19 @@ export default function Dashboard() {
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
       {/* Topbar */}
-      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px' }}>
           <span style={{ color: '#000' }}>Inventory</span>
           <span style={{ color: '#F5B800' }}>Sux</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{profile?.first_name} {profile?.last_name}</div>
-            <div style={{ fontSize: '11px', color: '#999' }}>{profile?.bar_name}</div>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+
+          {!isMobile && (
+            <div style={{ textAlign: 'right', marginRight: '4px' }}>
+              <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{profile?.first_name} {profile?.last_name}</div>
+              <div style={{ fontSize: '11px', color: '#999' }}>{profile?.bar_name}</div>
+            </div>
+          )}
 
           {/* Notification bell */}
           <div style={{ position: 'relative' }}>
@@ -148,7 +155,7 @@ export default function Dashboard() {
             </button>
 
             {notifOpen && (
-              <div style={{ position: 'absolute', right: 0, top: '42px', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.12)', width: '340px', zIndex: 100, overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', right: 0, top: '42px', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', boxShadow: '0 4px 24px rgba(0,0,0,0.12)', width: isMobile ? '300px' : '340px', zIndex: 100, overflow: 'hidden' }}>
                 <div style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ fontSize: '13px', fontWeight: '600', color: '#000' }}>Order Replies</div>
                   {replies.some(r => !r.read) && (
@@ -192,11 +199,17 @@ export default function Dashboard() {
           <div style={{ position: 'relative' }}>
             <button
               onClick={() => { setMenuOpen(o => !o); setNotifOpen(false) }}
-              style={{ background: '#333', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 14px', fontSize: '12px', cursor: 'pointer' }}>
-              Account ▾
+              style={{ background: '#333', color: '#fff', border: 'none', borderRadius: '6px', padding: '6px 10px', fontSize: '12px', cursor: 'pointer' }}>
+              {isMobile ? '☰' : 'Account ▾'}
             </button>
             {menuOpen && (
               <div style={{ position: 'absolute', right: 0, top: '36px', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', boxShadow: '0 4px 16px rgba(0,0,0,0.1)', minWidth: '180px', zIndex: 100, overflow: 'hidden' }}>
+                {isMobile && (
+                  <div style={{ padding: '12px 16px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>
+                    <div style={{ fontSize: '13px', fontWeight: '600', color: '#000' }}>{profile?.first_name} {profile?.last_name}</div>
+                    <div style={{ fontSize: '11px', color: '#aaa' }}>{profile?.bar_name}</div>
+                  </div>
+                )}
                 <div onClick={() => { setMenuOpen(false); router.push('/account') }}
                   style={{ padding: '11px 16px', fontSize: '13px', color: '#000', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
                   onMouseEnter={e => e.currentTarget.style.background = '#fafafa'}
@@ -236,9 +249,11 @@ export default function Dashboard() {
       </div>
 
       {/* Body */}
-      <div style={{ padding: '32px 24px', maxWidth: '900px', margin: '0 auto' }}>
-        <div style={{ marginBottom: '28px' }}>
-          <h1 style={{ fontSize: '22px', fontWeight: '500', color: '#000' }}>Good to see you, {profile?.first_name}.</h1>
+      <div style={{ padding: isMobile ? '20px 16px' : '32px 24px', maxWidth: '900px', margin: '0 auto' }}>
+        <div style={{ marginBottom: '24px' }}>
+          <h1 style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '500', color: '#000' }}>
+            Good to see you, {profile?.first_name}.
+          </h1>
           <p style={{ color: '#999', fontSize: '14px', marginTop: '4px' }}>What are we working on today?</p>
         </div>
 
@@ -248,56 +263,53 @@ export default function Dashboard() {
             background: hasOverdue ? '#fff5f5' : '#fffbe6',
             border: `1px solid ${hasOverdue ? '#fca5a5' : '#f0d060'}`,
             borderRadius: '12px',
-            padding: '14px 18px',
-            marginBottom: '24px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
+            padding: '14px 16px',
+            marginBottom: '20px',
           }}>
-            <div>
-              <div style={{ fontSize: '13px', fontWeight: '600', color: hasOverdue ? '#c53030' : '#854F0B', marginBottom: '3px' }}>
-                {hasOverdue ? '⚠️ Overdue — ' : '🚚 '}
-                {pendingOrders.length} order{pendingOrders.length !== 1 ? 's' : ''} pending delivery confirmation
-                {hasOverdue && ' — confirmation required'}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: hasOverdue ? '#c53030' : '#854F0B', marginBottom: '3px' }}>
+                  {hasOverdue ? '⚠️ Overdue — ' : '🚚 '}
+                  {pendingOrders.length} order{pendingOrders.length !== 1 ? 's' : ''} pending delivery confirmation
+                  {hasOverdue && ' — confirmation required'}
+                </div>
+                <div style={{ fontSize: '12px', color: hasOverdue ? '#c53030' : '#a07800' }}>
+                  {hasOverdue
+                    ? 'One or more orders are over 7 days old and must be confirmed.'
+                    : 'Confirm what arrived to keep your inventory accurate.'}
+                </div>
               </div>
-              <div style={{ fontSize: '12px', color: hasOverdue ? '#c53030' : '#a07800' }}>
-                {hasOverdue
-                  ? 'One or more orders are over 7 days old and must be confirmed.'
-                  : 'Confirm what arrived to keep your inventory accurate.'}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0, marginLeft: '16px' }}>
-              <button
-                onClick={() => {
-                  const first = pendingOrders[0]
-                  const area = first.area === 'boh' ? '/boh/ordering' : '/foh/ordering'
-                  router.push(area)
-                }}
-                style={{ background: hasOverdue ? '#E24B4A' : '#F5B800', color: hasOverdue ? '#fff' : '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                Review Now
-              </button>
-              {!hasOverdue && (
-                <button onClick={dismissBanner}
-                  style={{ background: 'none', border: 'none', color: '#aaa', fontSize: '18px', cursor: 'pointer', lineHeight: 1, padding: '4px' }}>
-                  ×
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+                <button
+                  onClick={() => {
+                    const first = pendingOrders[0]
+                    const area = first.area === 'boh' ? '/boh/ordering' : '/foh/ordering'
+                    router.push(area)
+                  }}
+                  style={{ background: hasOverdue ? '#E24B4A' : '#F5B800', color: hasOverdue ? '#fff' : '#000', border: 'none', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                  Review
                 </button>
-              )}
+                {!hasOverdue && (
+                  <button onClick={dismissBanner}
+                    style={{ background: 'none', border: 'none', color: '#aaa', fontSize: '18px', cursor: 'pointer', lineHeight: 1, padding: '4px' }}>
+                    ×
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         )}
 
         {/* Trial banner */}
         {(profile?.subscription_status === 'trial' || !profile?.subscription_status) && !profile?.stripe_customer_id && (
-          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: '600', color: '#fff', marginBottom: '3px' }}>
-                🎉 Your 14-day free trial is active
-              </div>
-              <div style={{ fontSize: '12px', color: '#aaa' }}>
-                Add a payment method to continue after your trial ends. No charge for 14 days.
-              </div>
+          <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', padding: '16px', marginBottom: '20px' }}>
+            <div style={{ fontSize: '14px', fontWeight: '600', color: '#fff', marginBottom: '3px' }}>
+              🎉 Your 14-day free trial is active
             </div>
-            <div style={{ display: 'flex', gap: '8px', flexShrink: 0, marginLeft: '16px' }}>
+            <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '14px' }}>
+              Add a payment method to continue after your trial ends. No charge for 14 days.
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <button onClick={async () => {
                 const { data: { session } } = await supabase.auth.getSession()
                 const res = await fetch('/api/stripe/create-checkout', {
@@ -307,7 +319,7 @@ export default function Dashboard() {
                 })
                 const data = await res.json()
                 if (data.url) window.location.href = data.url
-              }} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              }} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', flex: isMobile ? '1' : 'none' }}>
                 FOH — $29/mo
               </button>
               <button onClick={async () => {
@@ -319,7 +331,7 @@ export default function Dashboard() {
                 })
                 const data = await res.json()
                 if (data.url) window.location.href = data.url
-              }} style={{ background: '#fff', color: '#000', border: '1px solid #444', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              }} style={{ background: '#fff', color: '#000', border: '1px solid #444', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', flex: isMobile ? '1' : 'none' }}>
                 Bundle — $39/mo
               </button>
             </div>
@@ -328,8 +340,8 @@ export default function Dashboard() {
 
         {/* Past due banner */}
         {profile?.subscription_status === 'past_due' && (
-          <div style={{ background: '#fff5f5', border: '1px solid #fca5a5', borderRadius: '12px', padding: '14px 18px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: '13px', color: '#c53030' }}>
+          <div style={{ background: '#fff5f5', border: '1px solid #fca5a5', borderRadius: '12px', padding: '14px 16px', marginBottom: '20px' }}>
+            <div style={{ fontSize: '13px', color: '#c53030', marginBottom: '10px' }}>
               ⚠ Your payment failed. Please update your billing information to keep access.
             </div>
             <button onClick={async () => {
@@ -337,7 +349,7 @@ export default function Dashboard() {
               const res = await fetch('/api/stripe/portal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: session.user.id }) })
               const data = await res.json()
               if (data.url) window.location.href = data.url
-            }} style={{ background: '#E24B4A', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>
+            }} style={{ background: '#E24B4A', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
               Update Billing
             </button>
           </div>
@@ -345,8 +357,8 @@ export default function Dashboard() {
 
         {/* Cancelled banner */}
         {profile?.subscription_status === 'cancelled' && (
-          <div style={{ background: '#f5f5f3', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 18px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: '13px', color: '#555' }}>
+          <div style={{ background: '#f5f5f3', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 16px', marginBottom: '20px' }}>
+            <div style={{ fontSize: '13px', color: '#555', marginBottom: '10px' }}>
               Your subscription has been cancelled. Reactivate to restore full access.
             </div>
             <button onClick={async () => {
@@ -354,31 +366,30 @@ export default function Dashboard() {
               const res = await fetch('/api/stripe/create-checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH, userId: session.user.id, email: session.user.email, plan: 'foh' }) })
               const data = await res.json()
               if (data.url) window.location.href = data.url
-            }} style={{ background: '#333', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>
+            }} style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
               Reactivate
             </button>
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+        {/* FOH / BOH tiles */}
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '16px' }}>
 
-          {/* FOH */}
           <div onClick={() => router.push('/foh')}
-            style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '36px 28px', cursor: 'pointer', textAlign: 'center', transition: 'border-color 0.15s, box-shadow 0.15s' }}
+            style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: isMobile ? '24px 20px' : '36px 28px', cursor: 'pointer', textAlign: 'center', transition: 'border-color 0.15s, box-shadow 0.15s' }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = '#F5B800'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(245,184,0,0.12)' }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8e8e8'; e.currentTarget.style.boxShadow = 'none' }}>
-            <div style={{ fontSize: '40px', marginBottom: '14px' }}>🍸</div>
-            <div style={{ fontSize: '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Front of House</div>
+            <div style={{ fontSize: isMobile ? '32px' : '40px', marginBottom: '10px' }}>🍸</div>
+            <div style={{ fontSize: isMobile ? '16px' : '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Front of House</div>
             <div style={{ fontSize: '13px', color: '#aaa' }}>Ordering, Pour Cost, COGS, and Inventory</div>
           </div>
 
-          {/* BOH */}
           <div onClick={() => profile?.boh_access && router.push('/boh')}
-            style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '36px 28px', cursor: profile?.boh_access ? 'pointer' : 'default', textAlign: 'center', opacity: profile?.boh_access ? 1 : 0.5, transition: 'border-color 0.15s, box-shadow 0.15s' }}
+            style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: isMobile ? '24px 20px' : '36px 28px', cursor: profile?.boh_access ? 'pointer' : 'default', textAlign: 'center', opacity: profile?.boh_access ? 1 : 0.5, transition: 'border-color 0.15s, box-shadow 0.15s' }}
             onMouseEnter={e => { if (profile?.boh_access) { e.currentTarget.style.borderColor = '#F5B800'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(245,184,0,0.12)' }}}
             onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8e8e8'; e.currentTarget.style.boxShadow = 'none' }}>
-            <div style={{ fontSize: '40px', marginBottom: '14px' }}>🍳</div>
-            <div style={{ fontSize: '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Back of House</div>
+            <div style={{ fontSize: isMobile ? '32px' : '40px', marginBottom: '10px' }}>🍳</div>
+            <div style={{ fontSize: isMobile ? '16px' : '18px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Back of House</div>
             <div style={{ fontSize: '13px', color: '#aaa' }}>Food ordering, food cost, and kitchen COGS</div>
             {!profile?.boh_access && (
               <div style={{ display: 'inline-block', marginTop: '10px', background: '#F5B800', color: '#000', fontSize: '12px', fontWeight: '700', padding: '6px 16px', borderRadius: '20px' }}>
@@ -390,7 +401,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Click outside overlays */}
       {(menuOpen || notifOpen) && (
         <div onClick={() => { setMenuOpen(false); setNotifOpen(false) }}
           style={{ position: 'fixed', inset: 0, zIndex: 99 }} />
