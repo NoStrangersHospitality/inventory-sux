@@ -408,7 +408,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
                                 style={{ width: '52px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                             </td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                              <input type="number" min="0" step="0.1" value={row.on_hand_count}
+                              <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count}
                                 onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
                                 style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                             </td>
@@ -463,7 +463,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
                             <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                             <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                             <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                              <input type="number" min="0" value={row.overrideQty}
+                              <input type="number" min="0" value={row.overrideQty === 0 ? '' : row.overrideQty}
                                 onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
                                 style={{ width: '64px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
                             </td>
