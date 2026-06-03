@@ -8,6 +8,7 @@ export default function BOHOrdering() {
   const [loading, setLoading] = useState(true)
   const [counts, setCounts] = useState({ items: 0, vendors: 0 })
   const [orders, setOrders] = useState([])
+  const [pendingOrders, setPendingOrders] = useState([])
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -21,17 +22,29 @@ export default function BOHOrdering() {
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.boh_access) { router.push('/dashboard'); return }
-      const [{ count: itemCount }, { count: vendorCount }, { data: orderData }] = await Promise.all([
+      const [
+        { count: itemCount },
+        { count: vendorCount },
+        { data: orderData },
+        { data: pendingData }
+      ] = await Promise.all([
         supabase.from('boh_items').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
         supabase.from('vendors').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
-        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'boh').order('submitted_at', { ascending: false }).limit(10)
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'boh').eq('receiving_status', 'received').order('submitted_at', { ascending: false }).limit(10),
+        supabase.from('orders').select('*, order_lines(*)').eq('user_id', session.user.id).eq('area', 'boh').eq('receiving_status', 'pending').order('submitted_at', { ascending: true })
       ])
       setCounts({ items: itemCount || 0, vendors: vendorCount || 0 })
       setOrders(orderData || [])
+      setPendingOrders(pendingData || [])
       setLoading(false)
     }
     init()
   }, [])
+
+  const isOverdue = (order) => {
+    const days = (new Date() - new Date(order.submitted_at)) / (1000 * 60 * 60 * 24)
+    return days >= 7
+  }
 
   const viewOrderPDF = async (order) => {
     if (order.pdf_url) {
@@ -87,6 +100,52 @@ export default function BOHOrdering() {
           ))}
         </div>
 
+        {/* Pending receiving queue */}
+        {pendingOrders.length > 0 && (
+          <div style={{ marginBottom: '32px' }}>
+            <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              🚚 Pending Delivery Confirmation
+              <span style={{ background: '#F5B800', color: '#000', fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '10px' }}>
+                {pendingOrders.length}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {pendingOrders.map(order => {
+                const overdue = isOverdue(order)
+                const vendors = [...new Set(order.order_lines?.map(l => l.distributor_name).filter(Boolean))]
+                return (
+                  <div key={order.id}
+                    style={{
+                      background: overdue ? '#fff8f8' : '#fffdf5',
+                      border: `1px solid ${overdue ? '#fca5a5' : '#f0d060'}`,
+                      borderRadius: '12px',
+                      padding: '16px 20px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: '600', color: '#000', marginBottom: '4px' }}>
+                        {order.submitted_at ? new Date(order.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '--'}
+                        {overdue && <span style={{ marginLeft: '8px', fontSize: '11px', color: '#E24B4A', fontWeight: '700' }}>OVERDUE</span>}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#aaa' }}>
+                        {order.order_lines?.length || 0} items
+                        {vendors.length > 0 && ` · ${vendors.join(', ')}`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => router.push(`/boh/ordering/receive/${order.id}`)}
+                      style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                      Confirm Delivery →
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Order history */}
         <div style={{ marginBottom: '12px' }}>
           <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Order History</div>
@@ -94,7 +153,7 @@ export default function BOHOrdering() {
 
         {orders.length === 0 ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '36px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
-            No orders yet. Build your first order above.
+            No completed orders yet. Build your first order above.
           </div>
         ) : (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
@@ -112,7 +171,7 @@ export default function BOHOrdering() {
                     </td>
                     <td style={{ padding: '12px 16px' }}>
                       <span style={{ background: '#EAF3DE', color: '#27500A', border: '1px solid #97C459', borderRadius: '10px', fontSize: '11px', padding: '2px 8px', fontWeight: '500' }}>
-                        Submitted
+                        Received
                       </span>
                     </td>
                     <td style={{ padding: '12px 16px', color: '#555', fontSize: '13px' }}>
