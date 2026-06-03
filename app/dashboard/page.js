@@ -5,19 +5,21 @@ import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
 export default function Dashboard() {
-  
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
   const [menuOpen, setMenuOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const [replies, setReplies] = useState([])
   const [unreadCount, setUnreadCount] = useState(0)
+  const [pendingOrders, setPendingOrders] = useState([])
+  const [bannerDismissed, setBannerDismissed] = useState(false)
   const router = useRouter()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
+
   const loadReplies = async (userId) => {
     const { data } = await supabase
       .from('order_replies')
@@ -28,20 +30,33 @@ export default function Dashboard() {
     setReplies(data || [])
     setUnreadCount((data || []).filter(r => !r.read).length)
   }
-  
+
   useEffect(() => {
     let realtimeChannel
 
     const getUser = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      
+
       const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       setProfile(profile)
       await loadReplies(session.user.id)
+
+      // Load pending orders for delivery banner
+      const { data: pending } = await supabase
+        .from('orders')
+        .select('*, order_lines(count)')
+        .eq('user_id', session.user.id)
+        .eq('receiving_status', 'pending')
+        .order('submitted_at', { ascending: true })
+      setPendingOrders(pending || [])
+
+      // Check session dismissal
+      const dismissed = sessionStorage.getItem('delivery_banner_dismissed')
+      setBannerDismissed(!!dismissed)
+
       setLoading(false)
 
-      // Real-time subscription — bell updates instantly when a reply lands
       realtimeChannel = supabase
         .channel('order_replies_live')
         .on(
@@ -67,8 +82,6 @@ export default function Dashboard() {
     }
   }, [])
 
-  
-
   const markAllRead = async () => {
     const { data: { session } } = await supabase.auth.getSession()
     const unreadIds = replies.filter(r => !r.read).map(r => r.id)
@@ -83,6 +96,21 @@ export default function Dashboard() {
     setReplies(prev => prev.map(r => r.id === id ? { ...r, read: true } : r))
     setUnreadCount(prev => Math.max(0, prev - 1))
   }
+
+  const dismissBanner = () => {
+    sessionStorage.setItem('delivery_banner_dismissed', 'true')
+    setBannerDismissed(true)
+  }
+
+  const isOverdue = (order) => {
+    const submitted = new Date(order.submitted_at)
+    const now = new Date()
+    const days = (now - submitted) / (1000 * 60 * 60 * 24)
+    return days >= 7
+  }
+
+  const hasOverdue = pendingOrders.some(o => isOverdue(o))
+  const showBanner = pendingOrders.length > 0 && (!bannerDismissed || hasOverdue)
 
   if (loading) {
     return (
@@ -124,8 +152,7 @@ export default function Dashboard() {
                 <div style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div style={{ fontSize: '13px', fontWeight: '600', color: '#000' }}>Order Replies</div>
                   {replies.some(r => !r.read) && (
-                    <button onClick={markAllRead}
-                      style={{ background: 'none', border: 'none', fontSize: '11px', color: '#aaa', cursor: 'pointer' }}>
+                    <button onClick={markAllRead} style={{ background: 'none', border: 'none', fontSize: '11px', color: '#aaa', cursor: 'pointer' }}>
                       Mark all read
                     </button>
                   )}
@@ -215,6 +242,50 @@ export default function Dashboard() {
           <p style={{ color: '#999', fontSize: '14px', marginTop: '4px' }}>What are we working on today?</p>
         </div>
 
+        {/* Delivery confirmation banner */}
+        {showBanner && (
+          <div style={{
+            background: hasOverdue ? '#fff5f5' : '#fffbe6',
+            border: `1px solid ${hasOverdue ? '#fca5a5' : '#f0d060'}`,
+            borderRadius: '12px',
+            padding: '14px 18px',
+            marginBottom: '24px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+          }}>
+            <div>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: hasOverdue ? '#c53030' : '#854F0B', marginBottom: '3px' }}>
+                {hasOverdue ? '⚠️ Overdue — ' : '🚚 '}
+                {pendingOrders.length} order{pendingOrders.length !== 1 ? 's' : ''} pending delivery confirmation
+                {hasOverdue && ' — confirmation required'}
+              </div>
+              <div style={{ fontSize: '12px', color: hasOverdue ? '#c53030' : '#a07800' }}>
+                {hasOverdue
+                  ? 'One or more orders are over 7 days old and must be confirmed.'
+                  : 'Confirm what arrived to keep your inventory accurate.'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0, marginLeft: '16px' }}>
+              <button
+                onClick={() => {
+                  const first = pendingOrders[0]
+                  const area = first.area === 'boh' ? '/boh/ordering' : '/foh/ordering'
+                  router.push(area)
+                }}
+                style={{ background: hasOverdue ? '#E24B4A' : '#F5B800', color: hasOverdue ? '#fff' : '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                Review Now
+              </button>
+              {!hasOverdue && (
+                <button onClick={dismissBanner}
+                  style={{ background: 'none', border: 'none', color: '#aaa', fontSize: '18px', cursor: 'pointer', lineHeight: 1, padding: '4px' }}>
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Trial banner */}
         {(profile?.subscription_status === 'trial' || !profile?.subscription_status) && !profile?.stripe_customer_id && (
           <div style={{ background: '#111', border: '1px solid #333', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -232,12 +303,7 @@ export default function Dashboard() {
                 const res = await fetch('/api/stripe/create-checkout', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH,
-                    userId: session.user.id,
-                    email: session.user.email,
-                    plan: 'foh'
-                  })
+                  body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH, userId: session.user.id, email: session.user.email, plan: 'foh' })
                 })
                 const data = await res.json()
                 if (data.url) window.location.href = data.url
@@ -249,12 +315,7 @@ export default function Dashboard() {
                 const res = await fetch('/api/stripe/create-checkout', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BUNDLE,
-                    userId: session.user.id,
-                    email: session.user.email,
-                    plan: 'bundle'
-                  })
+                  body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BUNDLE, userId: session.user.id, email: session.user.email, plan: 'bundle' })
                 })
                 const data = await res.json()
                 if (data.url) window.location.href = data.url
@@ -273,11 +334,7 @@ export default function Dashboard() {
             </div>
             <button onClick={async () => {
               const { data: { session } } = await supabase.auth.getSession()
-              const res = await fetch('/api/stripe/portal', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: session.user.id })
-              })
+              const res = await fetch('/api/stripe/portal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: session.user.id }) })
               const data = await res.json()
               if (data.url) window.location.href = data.url
             }} style={{ background: '#E24B4A', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>
@@ -294,16 +351,7 @@ export default function Dashboard() {
             </div>
             <button onClick={async () => {
               const { data: { session } } = await supabase.auth.getSession()
-              const res = await fetch('/api/stripe/create-checkout', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH,
-                  userId: session.user.id,
-                  email: session.user.email,
-                  plan: 'foh'
-                })
-              })
+              const res = await fetch('/api/stripe/create-checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_FOH, userId: session.user.id, email: session.user.email, plan: 'foh' }) })
               const data = await res.json()
               if (data.url) window.location.href = data.url
             }} style={{ background: '#333', color: '#fff', border: 'none', padding: '7px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginLeft: '16px', whiteSpace: 'nowrap' }}>

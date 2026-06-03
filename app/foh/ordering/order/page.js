@@ -152,10 +152,11 @@ export default function Order() {
     const orderDate = new Date().toLocaleDateString()
 
     const { data: order } = await supabase.from('orders').insert({
-      user_id: session.user.id,
-      status: 'submitted',
-      submitted_at: new Date().toISOString()
-    }).select().single()
+  user_id: session.user.id,
+  status: 'submitted',
+  receiving_status: 'pending',
+  submitted_at: new Date().toISOString()
+}).select().single()
 
     const lines = []
     Object.keys(recapRows).forEach(dn => {
