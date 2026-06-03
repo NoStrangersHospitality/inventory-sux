@@ -154,6 +154,7 @@ export default function Order() {
     const { data: order } = await supabase.from('orders').insert({
   user_id: session.user.id,
   status: 'submitted',
+  area: 'foh',
   receiving_status: 'pending',
   submitted_at: new Date().toISOString()
 }).select().single()

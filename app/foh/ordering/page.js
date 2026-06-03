@@ -23,8 +23,8 @@ export default function Ordering() {
       const [{ count: itemCount }, { count: distCount }, { data: orderData }, { data: pendingData }] = await Promise.all([
         supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true),
         supabase.from('distributors').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
-        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).not('area', 'eq', 'boh').eq('receiving_status', 'received').order('submitted_at', { ascending: false }).limit(10),
-        supabase.from('orders').select('*, order_lines(*)').eq('user_id', session.user.id).not('area', 'eq', 'boh').eq('receiving_status', 'pending').order('submitted_at', { ascending: true })
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'foh').eq('receiving_status', 'received').order('submitted_at', { ascending: false }).limit(10)
+       supabase.from('orders').select('*, order_lines(*)').eq('user_id', session.user.id).eq('area', 'foh').eq('receiving_status', 'pending').order('submitted_at', { ascending: true })
       ])
       setCounts({ items: itemCount || 0, distributors: distCount || 0 })
       setOrders(orderData || [])
