@@ -28,17 +28,38 @@ export default function Order() {
     { key: 'misc', label: 'Misc', icon: '📦' },
   ]
 
+  const getDefaultUnit = (item) => {
+    if (item.category === 'wine') return 'case'
+    if (item.category === 'liquor') return 'bottle'
+    if (item.category === 'beer') {
+      if (item.item_type === 'keg') return 'keg'
+      return item.unit || 'bottle'
+    }
+    return item.unit || 'bottle'
+  }
+
+  const canSwitchUnit = (item) => {
+    if (item.category === 'beer' && item.item_type === 'keg') return false
+    if (item.category === 'misc') return false
+    return true
+  }
+
+  const getUnitOptions = (item) => {
+    if (item.category === 'liquor') return ['bottle', 'case']
+    if (item.category === 'wine') return ['case', 'bottle']
+    if (item.category === 'beer') {
+      if (item.item_type === 'keg') return ['keg']
+      return [item.unit || 'bottle', 'case']
+    }
+    return [item.unit || 'bottle']
+  }
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const [{ data: itemData }, { data: distData }] = await Promise.all([
-        supabase.from('inventory_items')
-          .select('*')
-          .eq('user_id', session.user.id)
-          .eq('area', 'foh')
-          .eq('on_menu', true)
-          .order('name'),
+        supabase.from('inventory_items').select('*').eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true).order('name'),
         supabase.from('distributors').select('*').eq('user_id', session.user.id).order('name')
       ])
       setItems(itemData || [])
@@ -84,32 +105,27 @@ export default function Order() {
   }
 
   const updateRow = async (distName, idx, field, val) => {
-  setOrderRows(prev => {
-    const next = { ...prev }
-    const rows = [...next[distName]]
-    rows[idx] = { ...rows[idx], [field]: val }
-    const row = rows[idx]
-    const par = field === 'par' ? val : (row.par || 0)
-    const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
-    rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
-    next[distName] = rows
-    return next
-  })
+    setOrderRows(prev => {
+      const next = { ...prev }
+      const rows = [...next[distName]]
+      rows[idx] = { ...rows[idx], [field]: val }
+      const row = rows[idx]
+      const par = field === 'par' ? val : (row.par || 0)
+      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
+      next[distName] = rows
+      return next
+    })
 
-  // Persist par changes back to inventory_items
-  if (field === 'par') {
-    const { data: { session } } = await supabase.auth.getSession()
-    const rows = orderRows[distName]
-    const row = rows[idx]
-    if (row?.id) {
-      await supabase
-        .from('inventory_items')
-        .update({ par: parseFloat(val) || 0 })
-        .eq('id', row.id)
-        .eq('user_id', session.user.id)
+    if (field === 'par') {
+      const { data: { session } } = await supabase.auth.getSession()
+      const rows = orderRows[distName]
+      const row = rows[idx]
+      if (row?.id) {
+        await supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
+      }
     }
   }
-}
 
   const buildRecap = () => {
     const rd = {}
@@ -118,8 +134,8 @@ export default function Order() {
       if (needed.length) rd[dn] = needed.map(r => ({
         ...r,
         overrideQty: r.suggested,
-        fullCase: false,
-        finalQty: r.suggested
+        finalQty: r.suggested,
+        orderUnit: getDefaultUnit(r)
       }))
     })
     if (!Object.keys(rd).length) { alert('No items need ordering.'); return }
@@ -137,14 +153,11 @@ export default function Order() {
     })
   }
 
-  const toggleFullCase = (distName, idx, checked) => {
+  const updateRecapUnit = (distName, idx, unit) => {
     setRecapRows(prev => {
       const next = { ...prev }
       const rows = [...next[distName]]
-      const row = rows[idx]
-      const cs = parseInt(row.case_size) || 1
-      const finalQty = checked ? Math.ceil(row.overrideQty / cs) * cs : row.overrideQty
-      rows[idx] = { ...row, fullCase: checked, finalQty }
+      rows[idx] = { ...rows[idx], orderUnit: unit }
       next[distName] = rows
       return next
     })
@@ -154,24 +167,18 @@ export default function Order() {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
 
-    // Get profile for manager name and bar name
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('first_name, last_name, bar_name')
-      .eq('id', session.user.id)
-      .single()
-
+    const { data: profile } = await supabase.from('profiles').select('first_name, last_name, bar_name').eq('id', session.user.id).single()
     const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
     const barName = profile?.bar_name || 'Your Bar'
     const orderDate = new Date().toLocaleDateString()
 
     const { data: order } = await supabase.from('orders').insert({
-  user_id: session.user.id,
-  status: 'submitted',
-  area: 'foh',
-  receiving_status: 'pending',
-  submitted_at: new Date().toISOString()
-}).select().single()
+      user_id: session.user.id,
+      status: 'submitted',
+      area: 'foh',
+      receiving_status: 'pending',
+      submitted_at: new Date().toISOString()
+    }).select().single()
 
     const lines = []
     Object.keys(recapRows).forEach(dn => {
@@ -181,6 +188,7 @@ export default function Order() {
           user_id: session.user.id,
           item_id: row.id,
           item_name: row.name,
+          unit: row.orderUnit || row.unit || '',
           distributor_id: row.distributor_id || null,
           distributor_name: dn,
           par: row.par || 0,
@@ -193,31 +201,22 @@ export default function Order() {
     })
 
     const { error: linesError } = await supabase.from('order_lines').insert(lines)
-if (linesError) console.error('Order lines insert error:', linesError)
+    if (linesError) console.error('Order lines insert error:', linesError)
 
-    // Send email and SMS per distributor
     const distributorGroups = {}
     lines.forEach(line => {
       if (!distributorGroups[line.distributor_name]) {
-        distributorGroups[line.distributor_name] = {
-          name: line.distributor_name,
-          id: line.distributor_id,
-          lines: []
-        }
+        distributorGroups[line.distributor_name] = { name: line.distributor_name, id: line.distributor_id, lines: [] }
       }
       distributorGroups[line.distributor_name].lines.push(line)
     })
 
     const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
-    const { data: distContacts } = await supabase
-      .from('distributors')
-      .select('id, name, email, phone, order_method')
-      .in('id', distIds)
+    const { data: distContacts } = await supabase.from('distributors').select('id, name, email, phone, order_method').in('id', distIds)
 
     for (const [distName, group] of Object.entries(distributorGroups)) {
       const contact = distContacts?.find(d => d.id === group.id)
       if (!contact) continue
-
       const orderLines = group.lines.filter(l => l.final_qty > 0)
       if (orderLines.length === 0) continue
 
@@ -226,19 +225,9 @@ if (linesError) console.error('Order lines insert error:', linesError)
           await fetch('/api/email/order', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              distributorName: contact.name,
-              distributorEmail: contact.email,
-              barName,
-              managerName,
-              orderLines,
-              orderId: order.id,
-              orderDate
-            })
+            body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate })
           })
-        } catch (err) {
-          console.error('Order email failed for', contact.name, err)
-        }
+        } catch (err) { console.error('Order email failed for', contact.name, err) }
       }
 
       if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
@@ -246,30 +235,16 @@ if (linesError) console.error('Order lines insert error:', linesError)
           await fetch('/api/sms/order', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              distributorPhone: contact.phone,
-              distributorName: contact.name,
-              barName,
-              managerName,
-              orderLines,
-              orderId: order.id,
-              orderDate
-            })
+            body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate })
           })
-        } catch (err) {
-          console.error('Order SMS failed for', contact.name, err)
-        }
+        } catch (err) { console.error('Order SMS failed for', contact.name, err) }
       }
     }
-    // Generate order PDF and send confirmation email
+
     try {
       const distGroupsForPDF = Object.entries(distributorGroups).map(([name, group]) => {
         const contact = distContacts?.find(d => d.id === group.id)
-        return {
-          name,
-          email: contact?.email || null,
-          lines: group.lines.filter(l => l.final_qty > 0)
-        }
+        return { name, email: contact?.email || null, lines: group.lines.filter(l => l.final_qty > 0) }
       }).filter(g => g.lines.length > 0)
 
       const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
@@ -277,41 +252,19 @@ if (linesError) console.error('Order lines insert error:', linesError)
       const pdfRes = await fetch('/api/orders/generate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: order.id,
-          userId: session.user.id,
-          barName,
-          managerName,
-          orderDate,
-          distributorGroups: distGroupsForPDF,
-          totalItems
-        })
+        body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems })
       })
 
       const pdfData = await pdfRes.json()
-      console.log('PDF generation response:', pdfData)
 
-      // Send confirmation email to subscriber
       if (pdfData.pdfUrl) {
         await fetch('/api/email/order-confirmation', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: session.user.email,
-            barName,
-            managerName,
-            orderDate,
-            orderId: order.id,
-            pdfUrl: pdfData.pdfUrl,
-            distributorGroups: distGroupsForPDF,
-            totalItems
-          })
+          body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems })
         })
       }
-    } catch (err) {
-      console.error('PDF/email confirmation error:', err)
-      console.error('PDF error details:', JSON.stringify(err))
-    }
+    } catch (err) { console.error('PDF/email confirmation error:', err) }
 
     setSubmitting(false)
     setSubmitted(true)
@@ -421,7 +374,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                               <input type="number" min="0" defaultValue={row.par || 0}
                                 onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
-                                style={{ width: '52px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                                style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                             </td>
                             <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                               <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count}
@@ -447,7 +400,7 @@ if (linesError) console.error('Order lines insert error:', linesError)
         {step === 'recap' && (
           <>
             <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Recap</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginBottom: '20px' }}>Adjust quantities if needed, then submit.</p>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '20px' }}>Adjust quantities and units if needed, then submit.</p>
             {Object.keys(recapRows).map(dn => {
               const dist = distributors.find(d => d.name === dn)
               return (
@@ -462,30 +415,49 @@ if (linesError) console.error('Order lines insert error:', linesError)
                     <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                       <thead>
                         <tr>
-                          {['Product', 'Unit', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Final Qty'].map((h, i) => (
+                          {['Product', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Unit', 'Final'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {recapRows[dn].map((row, ri) => (
-                          <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '10px 12px', fontSize: '13px' }}>
-                              <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
-                              {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
-                            </td>
-                            <td style={{ padding: '10px 12px', color: '#888', fontSize: '12px', textAlign: 'center' }}>{row.unit || '--'}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(1)}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
-                            <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                              <input type="number" min="0" value={row.overrideQty === 0 ? '' : row.overrideQty}
-                                onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
-                                style={{ width: '64px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
-                            </td>
-                            <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '600', color: '#3B6D11', fontSize: '13px' }}>{row.finalQty}</td>
-                          </tr>
-                        ))}
+                        {recapRows[dn].map((row, ri) => {
+                          const unitOptions = getUnitOptions(row)
+                          const canSwitch = canSwitchUnit(row)
+                          return (
+                            <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                              <td style={{ padding: '10px 12px', fontSize: '13px' }}>
+                                <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
+                                {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(1)}</td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
+                              <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty}
+                                  onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
+                                  style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
+                              </td>
+                              <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                                {canSwitch && unitOptions.length > 1 ? (
+                                  <select
+                                    value={row.orderUnit}
+                                    onChange={e => updateRecapUnit(dn, ri, e.target.value)}
+                                    style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px 8px', fontSize: '12px', color: '#000', cursor: 'pointer' }}>
+                                    {unitOptions.map(u => (
+                                      <option key={u} value={u}>{u}</option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span style={{ fontSize: '12px', color: '#555', fontWeight: '500' }}>{row.orderUnit}</span>
+                                )}
+                              </td>
+                              <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '600', color: '#3B6D11', fontSize: '13px' }}>
+                                {row.finalQty} <span style={{ fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.orderUnit}</span>
+                              </td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -493,7 +465,8 @@ if (linesError) console.error('Order lines insert error:', linesError)
               )
             })}
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button onClick={submitOrder} disabled={submitting} style={{ ...btnStyle(true), background: submitting ? '#ccc' : '#333', color: '#fff', opacity: submitting ? 0.7 : 1 }}>
+              <button onClick={submitOrder} disabled={submitting}
+                style={{ ...btnStyle(true), background: submitting ? '#ccc' : '#333', color: '#fff', opacity: submitting ? 0.7 : 1 }}>
                 {submitting ? 'Submitting...' : '✉️ Submit Order'}
               </button>
             </div>
