@@ -12,17 +12,9 @@ export default function Account() {
   const [showPasswordForm, setShowPasswordForm] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
-  const [form, setForm] = useState({
-    first_name: '',
-    last_name: '',
-    bar_name: '',
-    city: '',
-    state: '',
-  })
-  const [passwordForm, setPasswordForm] = useState({
-    newPassword: '',
-    confirmPassword: '',
-  })
+  const [isMobile, setIsMobile] = useState(false)
+  const [form, setForm] = useState({ first_name: '', last_name: '', bar_name: '', city: '', state: '' })
+  const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' })
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -31,18 +23,19 @@ export default function Account() {
   )
 
   useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
+
+  useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       setProfile({ ...prof, email: session.user.email })
-      setForm({
-        first_name: prof?.first_name || '',
-        last_name: prof?.last_name || '',
-        bar_name: prof?.bar_name || '',
-        city: prof?.city || '',
-        state: prof?.state || '',
-      })
+      setForm({ first_name: prof?.first_name || '', last_name: prof?.last_name || '', bar_name: prof?.bar_name || '', city: prof?.city || '', state: prof?.state || '' })
       setLoading(false)
     }
     init()
@@ -55,11 +48,8 @@ export default function Account() {
     setErrorMsg('')
     const { data: { session } } = await supabase.auth.getSession()
     const { error } = await supabase.from('profiles').update({
-      first_name: form.first_name,
-      last_name: form.last_name,
-      bar_name: form.bar_name,
-      city: form.city,
-      state: form.state,
+      first_name: form.first_name, last_name: form.last_name,
+      bar_name: form.bar_name, city: form.city, state: form.state,
     }).eq('id', session.user.id)
     setSaving(false)
     if (error) {
@@ -72,14 +62,8 @@ export default function Account() {
 
   const changePassword = async () => {
     if (!passwordForm.newPassword || !passwordForm.confirmPassword) return
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-      setErrorMsg('Passwords do not match.')
-      return
-    }
-    if (passwordForm.newPassword.length < 8) {
-      setErrorMsg('Password must be at least 8 characters.')
-      return
-    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) { setErrorMsg('Passwords do not match.'); return }
+    if (passwordForm.newPassword.length < 8) { setErrorMsg('Password must be at least 8 characters.'); return }
     setChangingPassword(true)
     setErrorMsg('')
     const { error } = await supabase.auth.updateUser({ password: passwordForm.newPassword })
@@ -94,7 +78,7 @@ export default function Account() {
     }
   }
 
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }
+  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
 
   if (loading) return (
@@ -103,25 +87,29 @@ export default function Account() {
     </div>
   )
 
+  const subStatusColor = {
+    active: { bg: '#EAF3DE', color: '#27500A', border: '#97C459' },
+    trial: { bg: '#E6F1FB', color: '#0C447C', border: '#85B7EB' },
+    comp: { bg: '#FAEEDA', color: '#854F0B', border: '#f0c080' },
+  }[profile?.subscription_status] || { bg: '#f5f5f3', color: '#aaa', border: '#e8e8e8' }
+
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
-      {/* Topbar */}
-      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div onClick={() => router.push('/dashboard')} style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
           <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
         </div>
-        <button onClick={() => router.push('/dashboard')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Dashboard</button>
+        <button onClick={() => router.push('/dashboard')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Dashboard</button>
       </div>
 
-      <div style={{ padding: '28px 24px', maxWidth: '640px', margin: '0 auto' }}>
+      <div style={{ padding: isMobile ? '20px 16px' : '28px 24px', maxWidth: '640px', margin: '0 auto' }}>
 
-        <div style={{ marginBottom: '24px' }}>
-          <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Account Settings</h1>
+        <div style={{ marginBottom: '20px' }}>
+          <h1 style={{ fontSize: isMobile ? '18px' : '20px', fontWeight: '500', color: '#000' }}>Account Settings</h1>
           <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Manage your profile, password, and billing.</p>
         </div>
 
-        {/* Success / Error messages */}
         {successMsg && (
           <div style={{ background: '#EAF3DE', border: '1px solid #97C459', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#27500A' }}>
             ✓ {successMsg}
@@ -133,10 +121,10 @@ export default function Account() {
           </div>
         )}
 
-        {/* Profile info */}
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '16px' }}>
+        {/* Profile */}
+        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
           <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>Profile</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
             <div>
               <label style={labelStyle}>First Name</label>
               <input style={inputStyle} value={form.first_name} onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))} placeholder="First name" />
@@ -155,26 +143,26 @@ export default function Account() {
             </div>
             <div>
               <label style={labelStyle}>State</label>
-              <input style={inputStyle} value={form.state} onChange={e => setForm(f => ({ ...f, state: e.target.value }))} placeholder="State" />
+              <input style={inputStyle} value={form.state} onChange={e => setForm(f => ({ ...f, state: e.target.value }))} placeholder="IN" maxLength="2" />
             </div>
           </div>
           <button onClick={saveProfile} disabled={saving}
-            style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+            style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer', width: isMobile ? '100%' : 'auto' }}>
             {saving ? 'Saving...' : 'Save Profile'}
           </button>
         </div>
 
-        {/* Email — read only */}
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>Email Address</div>
-          <div style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#555' }}>
+        {/* Email */}
+        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Email Address</div>
+          <div style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '13px', color: '#555', marginBottom: '6px' }}>
             {profile?.email}
           </div>
-          <div style={{ fontSize: '11px', color: '#aaa', marginTop: '6px' }}>To change your email address contact support.</div>
+          <div style={{ fontSize: '11px', color: '#aaa' }}>To change your email address contact support.</div>
         </div>
 
         {/* Password */}
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '16px' }}>
+        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showPasswordForm ? '16px' : '0' }}>
             <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Password</div>
             <button onClick={() => { setShowPasswordForm(s => !s); setErrorMsg('') }}
@@ -193,17 +181,17 @@ export default function Account() {
                 <input style={inputStyle} type="password" placeholder="Confirm new password" value={passwordForm.confirmPassword} onChange={e => setPasswordForm(f => ({ ...f, confirmPassword: e.target.value }))} />
               </div>
               <button onClick={changePassword} disabled={changingPassword}
-                style={{ background: changingPassword ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '10px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: changingPassword ? 'not-allowed' : 'pointer' }}>
+                style={{ background: changingPassword ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '12px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: changingPassword ? 'not-allowed' : 'pointer', width: isMobile ? '100%' : 'auto' }}>
                 {changingPassword ? 'Updating...' : 'Update Password'}
               </button>
             </div>
           )}
         </div>
 
-        {/* Billing */}
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '16px' }}>
-          <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Subscription</div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+        {/* Subscription */}
+        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
+          <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '12px' }}>Subscription</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
             <div>
               <div style={{ fontSize: '13px', color: '#000', fontWeight: '500' }}>
                 {profile?.subscription_tier === 'both' ? 'FOH + BOH Bundle' : 'Front of House'}
@@ -215,31 +203,16 @@ export default function Account() {
                  profile?.subscription_status === 'cancelled' ? 'Cancelled' : '--'}
               </div>
             </div>
-            <span style={{
-              background: profile?.subscription_status === 'active' ? '#EAF3DE' :
-                          profile?.subscription_status === 'trial' ? '#E6F1FB' :
-                          profile?.subscription_status === 'comp' ? '#FAEEDA' : '#f5f5f3',
-              color: profile?.subscription_status === 'active' ? '#27500A' :
-                     profile?.subscription_status === 'trial' ? '#0C447C' :
-                     profile?.subscription_status === 'comp' ? '#854F0B' : '#aaa',
-              border: `1px solid ${profile?.subscription_status === 'active' ? '#97C459' :
-                                    profile?.subscription_status === 'trial' ? '#85B7EB' :
-                                    profile?.subscription_status === 'comp' ? '#f0c080' : '#e8e8e8'}`,
-              borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500'
-            }}>
+            <span style={{ background: subStatusColor.bg, color: subStatusColor.color, border: `1px solid ${subStatusColor.border}`, borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500', flexShrink: 0, marginLeft: '12px' }}>
               {profile?.subscription_status?.charAt(0).toUpperCase() + profile?.subscription_status?.slice(1) || 'Trial'}
             </span>
           </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button
-              style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}
+              style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', flex: isMobile ? '1' : 'none' }}
               onClick={async () => {
                 const { data: { session } } = await supabase.auth.getSession()
-                const res = await fetch('/api/stripe/portal', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ userId: session.user.id })
-                })
+                const res = await fetch('/api/stripe/portal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: session.user.id }) })
                 const data = await res.json()
                 if (data.url) window.location.href = data.url
                 else alert('No billing account found. Please contact support.')
@@ -248,55 +221,38 @@ export default function Account() {
             </button>
             {!profile?.boh_access && (
               <button
-                style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}
+                style={{ background: '#F5B800', color: '#000', border: 'none', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', flex: isMobile ? '1' : 'none' }}
                 onClick={async () => {
                   const { data: { session } } = await supabase.auth.getSession()
-                  const res = await fetch('/api/stripe/create-checkout', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BOH_ADDON,
-                      userId: session.user.id,
-                      email: session.user.email,
-                      plan: 'boh_addon'
-                    })
-                  })
+                  const res = await fetch('/api/stripe/create-checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ priceId: process.env.NEXT_PUBLIC_STRIPE_PRICE_BOH_ADDON, userId: session.user.id, email: session.user.email, plan: 'boh_addon' }) })
                   const data = await res.json()
                   if (data.url) window.location.href = data.url
                   else alert('Error starting checkout. Please try again.')
                 }}>
-                Add BOH for $10/mo
+                Add BOH — $10/mo
               </button>
             )}
           </div>
         </div>
 
         {/* Danger zone */}
-        <div style={{ background: '#fff', border: '1px solid #fca5a5', borderRadius: '12px', padding: '24px' }}>
+        <div style={{ background: '#fff', border: '1px solid #fca5a5', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '24px' }}>
           <div style={{ fontSize: '14px', fontWeight: '500', color: '#E24B4A', marginBottom: '8px' }}>Danger Zone</div>
           <div style={{ fontSize: '13px', color: '#555', marginBottom: '14px' }}>
             Cancelling your account will revoke access at the end of your current billing period. Your data will be retained for 30 days.
           </div>
           <button
-            style={{ background: 'none', border: '1px solid #E24B4A', color: '#E24B4A', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}
+            style={{ background: 'none', border: '1px solid #E24B4A', color: '#E24B4A', padding: '8px 16px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', width: isMobile ? '100%' : 'auto' }}
             onClick={() => alert('To cancel your account please open a support ticket and we will process it within one business day.')}>
             Cancel Account
           </button>
         </div>
 
         {/* Legal */}
-        <div style={{ marginTop: '24px', paddingTop: '24px', borderTop: '1px solid #e8e8e8', display: 'flex', gap: '16px', justifyContent: 'center' }}>
-          <a href="/privacy" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}
-            onMouseEnter={e => e.currentTarget.style.color = '#000'}
-            onMouseLeave={e => e.currentTarget.style.color = '#aaa'}>
-            Privacy Policy
-          </a>
+        <div style={{ paddingTop: '8px', paddingBottom: '32px', display: 'flex', gap: '16px', justifyContent: 'center' }}>
+          <a href="/privacy" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}>Privacy Policy</a>
           <span style={{ fontSize: '12px', color: '#e8e8e8' }}>|</span>
-          <a href="/terms" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}
-            onMouseEnter={e => e.currentTarget.style.color = '#000'}
-            onMouseLeave={e => e.currentTarget.style.color = '#aaa'}>
-            Terms of Service
-          </a>
+          <a href="/terms" style={{ fontSize: '12px', color: '#aaa', textDecoration: 'none' }}>Terms of Service</a>
         </div>
 
       </div>
