@@ -8,6 +8,20 @@ import {
   LineChart, Line, CartesianGrid, Legend
 } from 'recharts'
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
+        <div style={{ fontWeight: '600', color: '#000', marginBottom: '4px' }}>{label}</div>
+        {payload.map((p, i) => (
+          <div key={i} style={{ color: p.color, fontWeight: '600' }}>{p.name}: ${Number(p.value).toFixed(2)}</div>
+        ))}
+      </div>
+    )
+  }
+  return null
+}
+
 export default function FOHReports() {
   const [loading, setLoading] = useState(true)
   const [sessions, setSessions] = useState([])
@@ -197,20 +211,6 @@ export default function FOHReports() {
 
   const fmt = (n) => '$' + Number(n).toFixed(2)
   const fmtK = (n) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : fmt(n)
-
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
-          <div style={{ fontWeight: '600', color: '#000', marginBottom: '4px' }}>{label}</div>
-          {payload.map((p, i) => (
-            <div key={i} style={{ color: p.color, fontWeight: '600' }}>{p.name}: {fmt(p.value)}</div>
-          ))}
-        </div>
-      )
-    }
-    return null
-  }
 
   const filteredVariance = filterCategory === 'all'
     ? varianceReport

@@ -4,6 +4,106 @@ import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
+const CATEGORIES = [
+  { key: 'liquor', label: 'Liquor', icon: '🍾' },
+  { key: 'beer', label: 'Beer', icon: '🍺' },
+  { key: 'wine', label: 'Wine', icon: '🍷' },
+  { key: 'misc', label: 'Misc', icon: '📦' },
+]
+
+const ITEM_TYPES = {
+  liquor: ['bottle', 'case'],
+  beer: ['keg', 'can', 'bottle', 'case'],
+  wine: ['bottle', 'case'],
+  misc: ['bottle', 'unit', 'case'],
+}
+
+const VALID_TYPES = ['bottle', 'keg', 'can', 'case', 'weight', 'volume', 'unit']
+
+const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+
+const EditForm = ({ form, setForm, saving, isMobile, distributors, onSave, onCancel }) => {
+  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
+  return (
+    <div style={{ background: '#fafafa', borderLeft: isMobile ? 'none' : '3px solid #F5B800', borderTop: isMobile ? '3px solid #F5B800' : 'none', padding: '16px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+        <div style={{ gridColumn: '1/-1' }}>
+          <label style={labelStyle}>Item Name</label>
+          <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+        </div>
+        <div style={{ gridColumn: '1/-1' }}>
+          <label style={labelStyle}>Item Number / SKU</label>
+          <input style={inputStyle} placeholder="Distributor item number..." value={form.item_number} onChange={e => setForm(f => ({ ...f, item_number: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Category</label>
+          <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
+            {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Item Type</label>
+          <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
+            {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+          </select>
+        </div>
+        {form.category === 'wine' && (
+          <div>
+            <label style={labelStyle}>Wine Type</label>
+            <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
+              <option value="">-- Select --</option>
+              {['red', 'white', 'bubbles', 'rose', 'orange', 'other'].map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
+            </select>
+          </div>
+        )}
+        <div>
+          <label style={labelStyle}>On Hand</label>
+          <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Unit</label>
+          <input style={inputStyle} placeholder="bottle, keg, case..." value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Unit Cost ($)</label>
+          <input style={inputStyle} type="number" step="0.01" placeholder="0.00" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Par</label>
+          <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Distributor</label>
+          <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
+            <option value="">-- Select --</option>
+            {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        </div>
+        <div style={{ gridColumn: '1/-1' }}>
+          <label style={labelStyle}>Notes</label>
+          <input style={inputStyle} placeholder="Any additional notes..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+        </div>
+        <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
+          <input type="checkbox" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
+          <span style={{ fontSize: '13px', color: '#000' }}>On Menu — include on order sheet</span>
+        </div>
+      </div>
+      {form.on_hand > 0 && form.unit_cost > 0 && (
+        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '20px' }}>
+          <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>${(parseFloat(form.on_hand) * parseFloat(form.unit_cost)).toFixed(2)}</div></div>
+          {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button onClick={onCancel} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={onSave} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+          {saving ? 'Saving...' : 'Save Item'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function FOHInventoryDatabase() {
   const [items, setItems] = useState([])
   const [distributors, setDistributors] = useState([])
@@ -26,25 +126,6 @@ export default function FOHInventoryDatabase() {
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
-
-  const CATEGORIES = [
-    { key: 'liquor', label: 'Liquor', icon: '🍾' },
-    { key: 'beer', label: 'Beer', icon: '🍺' },
-    { key: 'wine', label: 'Wine', icon: '🍷' },
-    { key: 'misc', label: 'Misc', icon: '📦' },
-  ]
-
-  const ITEM_TYPES = {
-    liquor: ['bottle', 'case'],
-    beer: ['keg', 'can', 'bottle', 'case'],
-    wine: ['bottle', 'case'],
-    misc: ['bottle', 'unit', 'case'],
-  }
-
-  const VALID_TYPES = ['bottle', 'keg', 'can', 'case', 'weight', 'volume', 'unit']
-
-  const inputStyle = { width: '100%', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
-  const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
@@ -224,85 +305,6 @@ export default function FOHInventoryDatabase() {
     setImporting(false)
   }
 
-  const EditForm = ({ onSave, onCancel }) => (
-    <div style={{ background: '#fafafa', borderLeft: isMobile ? 'none' : '3px solid #F5B800', borderTop: isMobile ? '3px solid #F5B800' : 'none', padding: '16px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-        <div style={{ gridColumn: '1/-1' }}>
-          <label style={labelStyle}>Item Name</label>
-          <input style={inputStyle} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-        </div>
-        <div style={{ gridColumn: '1/-1' }}>
-          <label style={labelStyle}>Item Number / SKU</label>
-          <input style={inputStyle} placeholder="Distributor item number..." value={form.item_number} onChange={e => setForm(f => ({ ...f, item_number: e.target.value }))} />
-        </div>
-        <div>
-          <label style={labelStyle}>Category</label>
-          <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value, item_type: ITEM_TYPES[e.target.value][0] }))}>
-            {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label style={labelStyle}>Item Type</label>
-          <select style={inputStyle} value={form.item_type} onChange={e => setForm(f => ({ ...f, item_type: e.target.value }))}>
-            {(ITEM_TYPES[form.category] || ['bottle']).map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-          </select>
-        </div>
-        {form.category === 'wine' && (
-          <div>
-            <label style={labelStyle}>Wine Type</label>
-            <select style={inputStyle} value={form.wine_type || ''} onChange={e => setForm(f => ({ ...f, wine_type: e.target.value }))}>
-              <option value="">-- Select --</option>
-              {['red', 'white', 'bubbles', 'rose', 'orange', 'other'].map(t => <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
-            </select>
-          </div>
-        )}
-        <div>
-          <label style={labelStyle}>On Hand</label>
-          <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.on_hand} onChange={e => setForm(f => ({ ...f, on_hand: e.target.value }))} />
-        </div>
-        <div>
-          <label style={labelStyle}>Unit</label>
-          <input style={inputStyle} placeholder="bottle, keg, case..." value={form.unit} onChange={e => setForm(f => ({ ...f, unit: e.target.value }))} />
-        </div>
-        <div>
-          <label style={labelStyle}>Unit Cost ($)</label>
-          <input style={inputStyle} type="number" step="0.01" placeholder="0.00" value={form.unit_cost} onChange={e => setForm(f => ({ ...f, unit_cost: e.target.value }))} />
-        </div>
-        <div>
-          <label style={labelStyle}>Par</label>
-          <input style={inputStyle} type="number" step="0.1" placeholder="0" value={form.par} onChange={e => setForm(f => ({ ...f, par: e.target.value }))} />
-        </div>
-        <div>
-          <label style={labelStyle}>Distributor</label>
-          <select style={inputStyle} value={form.distributor_id} onChange={e => setForm(f => ({ ...f, distributor_id: e.target.value }))}>
-            <option value="">-- Select --</option>
-            {distributors.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-          </select>
-        </div>
-        <div style={{ gridColumn: '1/-1' }}>
-          <label style={labelStyle}>Notes</label>
-          <input style={inputStyle} placeholder="Any additional notes..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
-        </div>
-        <div style={{ gridColumn: '1/-1', display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 12px', background: '#fff', borderRadius: '8px', border: '1px solid #e8e8e8' }}>
-          <input type="checkbox" checked={form.on_menu} onChange={e => setForm(f => ({ ...f, on_menu: e.target.checked }))} style={{ width: '18px', height: '18px', cursor: 'pointer' }} />
-          <span style={{ fontSize: '13px', color: '#000' }}>On Menu — include on order sheet</span>
-        </div>
-      </div>
-      {form.on_hand > 0 && form.unit_cost > 0 && (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', marginBottom: '12px', display: 'flex', gap: '20px' }}>
-          <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Value</div><div style={{ fontSize: '15px', fontWeight: '700', color: '#F5B800' }}>{fmt(parseFloat(form.on_hand) * parseFloat(form.unit_cost))}</div></div>
-          {form.par > 0 && <div><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '2px' }}>Variance</div><div style={{ fontSize: '15px', fontWeight: '700', color: parseFloat(form.on_hand) >= parseFloat(form.par) ? '#3B6D11' : '#E24B4A' }}>{(parseFloat(form.on_hand) - parseFloat(form.par)).toFixed(1)}</div></div>}
-        </div>
-      )}
-      <div style={{ display: 'flex', gap: '8px' }}>
-        <button onClick={onCancel} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-        <button onClick={onSave} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
-          {saving ? 'Saving...' : 'Save Item'}
-        </button>
-      </div>
-    </div>
-  )
-
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
@@ -321,7 +323,6 @@ export default function FOHInventoryDatabase() {
 
       <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
-        {/* Header */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', gap: '12px' }}>
           <div>
             <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Inventory Database</h1>
@@ -332,27 +333,23 @@ export default function FOHInventoryDatabase() {
             {catItems.length > 0 && !isMobile && <button onClick={exportCSV} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
             {!isMobile && (
               <label style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
-                ↑ Import
-                <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
+                ↑ Import <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
               </label>
             )}
             <button onClick={openAddForm} style={{ background: '#333', color: '#fff', border: 'none', padding: isMobile ? '8px 12px' : '8px 16px', borderRadius: '8px', fontSize: isMobile ? '12px' : '13px', fontWeight: '600', cursor: 'pointer' }}>+ Add</button>
           </div>
         </div>
 
-        {/* Mobile action row */}
         {isMobile && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
             <button onClick={downloadTemplate} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Template</button>
             {catItems.length > 0 && <button onClick={exportCSV} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
             <label style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', textAlign: 'center' }}>
-              ↑ Import
-              <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
+              ↑ Import <input type="file" accept=".csv" onChange={handleImport} style={{ display: 'none' }} />
             </label>
           </div>
         )}
 
-        {/* Category tabs */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '8px', marginBottom: '16px' }}>
           {CATEGORIES.map(c => {
             const count = items.filter(i => i.category === c.key).length
@@ -369,15 +366,13 @@ export default function FOHInventoryDatabase() {
           })}
         </div>
 
-        {/* Add form */}
         {showAddForm && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', marginBottom: '16px', overflow: 'hidden' }}>
             <div style={{ padding: '14px 16px', borderBottom: '1px solid #f0f0f0', fontSize: '14px', fontWeight: '500', color: '#000' }}>Add Item</div>
-            <EditForm onSave={saveItem} onCancel={cancelEdit} />
+            <EditForm form={form} setForm={setForm} saving={saving} isMobile={isMobile} distributors={distributors} onSave={saveItem} onCancel={cancelEdit} />
           </div>
         )}
 
-        {/* Import preview */}
         {importPreview && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '12px' }}>
@@ -433,9 +428,7 @@ export default function FOHInventoryDatabase() {
                           <td style={{ padding: '7px 10px', color: '#666' }}>{r.par || '--'}</td>
                           <td style={{ padding: '7px 10px', color: '#666' }}>{r.on_menu ? 'Yes' : 'No'}</td>
                           <td style={{ padding: '7px 10px', color: r.distMatched ? '#666' : '#E24B4A' }}>{r.distName || '--'}{!r.distMatched && r.distName ? ' ⚠' : ''}</td>
-                          <td style={{ padding: '7px 10px' }}>
-                            {exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span> : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}
-                          </td>
+                          <td style={{ padding: '7px 10px' }}>{exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span> : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}</td>
                         </tr>
                       )
                     })}
@@ -451,7 +444,6 @@ export default function FOHInventoryDatabase() {
           </div>
         )}
 
-        {/* Item list */}
         {catItems.length === 0 && !importPreview ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
             No {CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()} items yet. Add one or import from CSV.
@@ -462,9 +454,7 @@ export default function FOHInventoryDatabase() {
               <div style={{ fontSize: '12px', color: '#aaa' }}>{catItems.length} items</div>
               <div style={{ fontSize: '12px', color: '#aaa' }}>Total: <strong style={{ color: '#000' }}>{fmt(totalValue)}</strong></div>
             </div>
-
             {isMobile ? (
-              // Mobile: cards
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {catItems.map(item => {
                   const variance = item.on_hand - item.par
@@ -478,9 +468,7 @@ export default function FOHInventoryDatabase() {
                           <div style={{ flex: 1, marginRight: '12px' }}>
                             <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '2px' }}>{item.name}</div>
                             <div style={{ fontSize: '11px', color: '#aaa' }}>
-                              {item.item_type}
-                              {dist && ` · ${dist.name}`}
-                              {item.item_number && ` · #${item.item_number}`}
+                              {item.item_type}{dist && ` · ${dist.name}`}{item.item_number && ` · #${item.item_number}`}
                             </div>
                           </div>
                           <button onClick={() => isEditing ? cancelEdit() : openEditForm(item)}
@@ -514,13 +502,12 @@ export default function FOHInventoryDatabase() {
                             : <span style={{ background: '#f5f5f3', color: '#aaa', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '10px', padding: '2px 8px' }}>Off Menu</span>}
                         </div>
                       </div>
-                      {isEditing && <EditForm onSave={saveItem} onCancel={cancelEdit} />}
+                      {isEditing && <EditForm form={form} setForm={setForm} saving={saving} isMobile={isMobile} distributors={distributors} onSave={saveItem} onCancel={cancelEdit} />}
                     </div>
                   )
                 })}
               </div>
             ) : (
-              // Desktop: table
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
@@ -563,7 +550,7 @@ export default function FOHInventoryDatabase() {
                           {isEditing && (
                             <tr>
                               <td colSpan={10} style={{ padding: '0' }}>
-                                <EditForm onSave={saveItem} onCancel={cancelEdit} />
+                                <EditForm form={form} setForm={setForm} saving={saving} isMobile={isMobile} distributors={distributors} onSave={saveItem} onCancel={cancelEdit} />
                               </td>
                             </tr>
                           )}

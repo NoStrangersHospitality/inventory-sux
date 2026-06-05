@@ -8,6 +8,18 @@ import {
   LineChart, Line, CartesianGrid
 } from 'recharts'
 
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
+        <div style={{ fontWeight: '600', color: '#000', marginBottom: '2px' }}>{label}</div>
+        <div style={{ color: '#F5B800', fontWeight: '700' }}>${Number(payload[0].value).toFixed(2)}</div>
+      </div>
+    )
+  }
+  return null
+}
+
 export default function BOH() {
   const [profile, setProfile] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -147,17 +159,6 @@ export default function BOH() {
   const fmt = (n) => '$' + Number(n).toFixed(2)
   const fmtK = (n) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : fmt(n)
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
-          <div style={{ fontWeight: '600', color: '#000', marginBottom: '2px' }}>{label}</div>
-          <div style={{ color: '#F5B800', fontWeight: '700' }}>{fmt(payload[0].value)}</div>
-        </div>
-      )
-    }
-    return null
-  }
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
