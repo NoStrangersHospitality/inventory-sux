@@ -4,8 +4,83 @@ import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
+const CATEGORIES = ['Bourbon', 'Rye', 'Scotch', 'Irish', 'Japanese', 'Whiskey', 'Tequila', 'Mezcal', 'Vodka', 'Gin', 'Rum', 'Brandy', 'Liqueur', 'Other']
+const SIZES = [
+  { label: 'Miniature', oz: 1.69 },
+  { label: 'Half Pint', oz: 6.76 },
+  { label: 'Pint', oz: 12.68 },
+  { label: '750ml', oz: 25.36 },
+  { label: 'Liter', oz: 33.81 },
+  { label: 'Handle', oz: 59.17 },
+]
+
+const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
+
+const BottleForm = ({ form, setForm, saving, isMobile, onSave, onCancel, editingId }) => {
+  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
+  const fmt = (n) => '$' + Number(n).toFixed(2)
+  return (
+    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
+      <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '14px' }}>{editingId ? 'Edit Bottle' : 'Add Bottle'}</h3>
+      <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '8px', padding: '12px 14px', marginBottom: '14px' }}>
+        <div style={{ fontSize: '12px', color: '#185FA5', fontWeight: '600', marginBottom: '8px' }}>Bottle Size Reference — tap to auto-fill</div>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3,1fr)' : 'repeat(6,1fr)', gap: '6px' }}>
+          {SIZES.map(s => (
+            <div key={s.label} onClick={() => setForm(f => ({ ...f, bottle_size_oz: s.oz }))}
+              style={{ background: form.bottle_size_oz == s.oz ? '#E6F1FB' : '#fff', border: `1px solid ${form.bottle_size_oz == s.oz ? '#85B7EB' : '#b5d4f4'}`, borderRadius: '6px', padding: '6px 8px', cursor: 'pointer', textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', fontWeight: '500', color: '#000' }}>{s.label}</div>
+              <div style={{ fontSize: '10px', color: '#5a9fd4' }}>{s.oz} oz</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+        <div style={{ gridColumn: '1/-1' }}>
+          <label style={labelStyle}>Bottle Name</label>
+          <input style={inputStyle} placeholder="Buffalo Trace Bourbon" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Category</label>
+          <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+            <option value="">-- Select --</option>
+            {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Bottle Size (oz)</label>
+          <input style={inputStyle} type="number" step="0.01" placeholder="25.36" value={form.bottle_size_oz} onChange={e => setForm(f => ({ ...f, bottle_size_oz: e.target.value }))} />
+        </div>
+        <div>
+          <label style={labelStyle}>Bottle Cost ($)</label>
+          <input style={inputStyle} type="number" step="0.01" placeholder="35.00" value={form.bottle_cost} onChange={e => setForm(f => ({ ...f, bottle_cost: e.target.value }))} />
+        </div>
+        {form.bottle_size_oz > 0 && form.bottle_cost > 0 && (
+          <div style={{ gridColumn: '1/-1', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '10px' }}>
+            {[
+              { label: 'Cost/oz', val: fmt(form.bottle_cost / form.bottle_size_oz), color: '#000' },
+              { label: '@ 20%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.20), color: '#3B6D11' },
+              { label: '@ 25%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.25), color: '#4a8a1a' },
+              { label: '@ 30%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.30), color: '#e07b00' },
+            ].map(p => (
+              <div key={p.label} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '11px', color: p.color, marginBottom: '3px' }}>{p.label}</div>
+                <div style={{ fontSize: isMobile ? '15px' : '18px', fontWeight: '700', color: p.color }}>{p.val}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <button onClick={onCancel} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+        <button onClick={onSave} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+          {saving ? 'Saving...' : 'Save Bottle'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function PourCost() {
-  const [profile, setProfile] = useState(null)
   const [bottles, setBottles] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -15,6 +90,7 @@ export default function PourCost() {
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState(null)
+  const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -22,22 +98,17 @@ export default function PourCost() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
 
-  const CATEGORIES = ['Bourbon', 'Rye', 'Scotch', 'Irish', 'Japanese', 'Whiskey', 'Tequila', 'Mezcal', 'Vodka', 'Gin', 'Rum', 'Brandy', 'Liqueur', 'Other']
-  const SIZES = [
-    { label: 'Miniature', oz: 1.69 },
-    { label: 'Half Pint', oz: 6.76 },
-    { label: 'Pint', oz: 12.68 },
-    { label: '750ml', oz: 25.36 },
-    { label: 'Liter', oz: 33.81 },
-    { label: 'Handle', oz: 59.17 },
-  ]
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      setProfile(prof)
       const { data: btls } = await supabase.from('pour_cost_bottles').select('*').eq('user_id', session.user.id).order('name')
       setBottles(btls || [])
       setLoading(false)
@@ -140,13 +211,7 @@ export default function PourCost() {
     const existingNames = bottles.map(b => b.name.toLowerCase())
     const toInsert = valid.filter(r => !existingNames.includes(r.name.toLowerCase()))
     if (toInsert.length > 0) {
-      await supabase.from('pour_cost_bottles').insert(toInsert.map(r => ({
-       name: r.name,
-       category: r.category,
-       bottle_size_oz: r.bottle_size_oz,
-       bottle_cost: r.bottle_cost,
-       user_id: session.user.id
-      })))
+      await supabase.from('pour_cost_bottles').insert(toInsert.map(r => ({ name: r.name, category: r.category, bottle_size_oz: r.bottle_size_oz, bottle_cost: r.bottle_cost, user_id: session.user.id })))
       const { data } = await supabase.from('pour_cost_bottles').select('*').eq('user_id', session.user.id).order('name')
       setBottles(data || [])
     }
@@ -160,186 +225,196 @@ export default function PourCost() {
     setBottles(bottles.filter(b => b.id !== id))
   }
 
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
-  const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
-  const outlineBtn = { background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }
-
-  if (loading) return <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' }}><div style={{ color: '#aaa' }}>Loading...</div></div>
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif' }}>
+      <div style={{ color: '#aaa' }}>Loading...</div>
+    </div>
+  )
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
-      {/* Topbar */}
-      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div onClick={() => router.push('/dashboard')} style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
           <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
         </div>
-        <button onClick={() => router.push('/foh')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← FOH</button>
+        <button onClick={() => router.push('/foh')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← FOH</button>
       </div>
 
-      <div style={{ padding: '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
+      <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', gap: '12px' }}>
           <div>
-            <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Pour Cost Calculator</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Target sell prices at 20%, 25%, 30%, and 35% COG</p>
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Pour Cost</h1>
+            {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Target sell prices at 20%, 25%, 30%, and 35% COG</p>}
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <button onClick={downloadTemplate} style={outlineBtn}>↓ Template</button>
-            {bottles.length > 0 && <button onClick={exportCSV} style={outlineBtn}>↓ Export</button>}
-            <label style={{ ...outlineBtn, display: 'inline-block' }}>
-              ↑ Import
-              <input type="file" accept=".csv" onChange={handleImportFile} style={{ display: 'none' }} />
-            </label>
-            <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-              + Add Bottle
-            </button>
+          <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+            {!isMobile && <>
+              <button onClick={downloadTemplate} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Template</button>
+              {bottles.length > 0 && <button onClick={exportCSV} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
+              <label style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>
+                ↑ Import <input type="file" accept=".csv" onChange={handleImportFile} style={{ display: 'none' }} />
+              </label>
+            </>}
+            <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>+ Add</button>
           </div>
         </div>
 
-        {/* Import Preview */}
+        {/* Mobile action row */}
+        {isMobile && (
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+            <button onClick={downloadTemplate} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Template</button>
+            {bottles.length > 0 && <button onClick={exportCSV} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
+            <label style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', textAlign: 'center' }}>
+              ↑ Import <input type="file" accept=".csv" onChange={handleImportFile} style={{ display: 'none' }} />
+            </label>
+          </div>
+        )}
+
+        {/* Import preview */}
         {importPreview && (
-          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '20px', marginBottom: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '12px' }}>
               <div>
                 <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Import Preview</div>
                 <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>
-                  {importPreview.filter(r => r.valid).length} valid · {importPreview.filter(r => !r.valid).length} invalid ·{' '}
-                  {importPreview.filter(r => r.valid && !bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase())).length} new
+                  {importPreview.filter(r => r.valid).length} valid · {importPreview.filter(r => r.valid && !bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase())).length} new
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={() => setImportPreview(null)} style={outlineBtn}>Cancel</button>
-                <button onClick={confirmImport} disabled={importing} style={{ background: importing ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '8px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importing ? 'not-allowed' : 'pointer' }}>
-                  {importing ? 'Importing...' : 'Confirm Import'}
+                <button onClick={() => setImportPreview(null)} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
+                <button onClick={confirmImport} disabled={importing} style={{ background: importing ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '7px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importing ? 'not-allowed' : 'pointer' }}>
+                  {importing ? 'Importing...' : 'Confirm'}
                 </button>
               </div>
             </div>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-              <thead>
-                <tr>
-                  {['Bottle', 'Category', 'Size (oz)', 'Cost', 'Status'].map((h, i) => (
+            {isMobile ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {importPreview.map((r, i) => {
+                  const exists = bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase())
+                  return (
+                    <div key={i} style={{ background: '#fafafa', borderRadius: '8px', padding: '10px 12px', border: '1px solid #f0f0f0' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px' }}>
+                        <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{r.name}</div>
+                        <div style={{ fontSize: '11px', color: !r.valid ? '#E24B4A' : exists ? '#aaa' : '#3B6D11', fontWeight: '500' }}>
+                          {!r.valid ? 'Invalid' : exists ? 'Exists' : '✓ New'}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#aaa' }}>
+                        {r.category || '--'} · {r.bottle_size_oz} oz · {r.bottle_cost ? fmt(r.bottle_cost) : '--'}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr>{['Bottle', 'Category', 'Size (oz)', 'Cost', 'Status'].map((h, i) => (
                     <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {importPreview.map((r, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                      <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.category || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size_oz || '--'}</td>
+                      <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_cost ? fmt(r.bottle_cost) : '--'}</td>
+                      <td style={{ padding: '7px 10px' }}>
+                        {!r.valid ? <span style={{ color: '#E24B4A', fontSize: '11px' }}>Missing size/cost</span>
+                          : bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase()) ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span>
+                          : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}
+                      </td>
+                    </tr>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
-                {importPreview.map((r, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                    <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
-                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.category || '--'}</td>
-                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size_oz || '--'}</td>
-                    <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_cost ? fmt(r.bottle_cost) : '--'}</td>
-                    <td style={{ padding: '7px 10px' }}>
-                      {!r.valid ? (
-                        <span style={{ color: '#E24B4A', fontSize: '11px' }}>Missing size/cost</span>
-                      ) : bottles.map(b => b.name.toLowerCase()).includes(r.name.toLowerCase()) ? (
-                        <span style={{ color: '#aaa', fontSize: '11px' }}>Already exists</span>
-                      ) : (
-                        <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ Ready</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            )}
           </div>
         )}
 
         {/* Stats */}
         {bottles.length > 0 && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '12px', marginBottom: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)', gap: '10px', marginBottom: '16px' }}>
             {[
               { label: 'Bottles', val: bottles.length, sub: 'in catalog' },
               { label: 'Avg Cost/oz', val: fmt(avgCostOz), sub: 'across all' },
               { label: 'Avg @ 25%', val: fmt(avgAt25), sub: 'target price' },
               { label: 'Categories', val: categories.length - 1, sub: 'spirit types' },
             ].map(s => (
-              <div key={s.label} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px 16px', textAlign: 'center' }}>
-                <div style={{ fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px' }}>{s.label}</div>
-                <div style={{ fontSize: '22px', fontWeight: '700', color: '#000' }}>{s.val}</div>
-                <div style={{ fontSize: '11px', color: '#aaa', marginTop: '2px' }}>{s.sub}</div>
+              <div key={s.label} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', padding: isMobile ? '12px 10px' : '14px 16px', textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: '4px' }}>{s.label}</div>
+                <div style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '700', color: '#000' }}>{s.val}</div>
+                <div style={{ fontSize: '10px', color: '#aaa', marginTop: '2px' }}>{s.sub}</div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Add/Edit Form */}
+        {/* Form */}
         {showForm && (
-          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Bottle' : 'Add Bottle'}</h3>
-            <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' }}>
-              <div style={{ fontSize: '12px', color: '#185FA5', fontWeight: '600', marginBottom: '8px' }}>Bottle Size Reference — click to auto-fill</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6,1fr)', gap: '6px' }}>
-                {SIZES.map(s => (
-                  <div key={s.label} onClick={() => setForm(f => ({ ...f, bottle_size_oz: s.oz }))}
-                    style={{ background: '#fff', border: '1px solid #b5d4f4', borderRadius: '6px', padding: '6px 8px', cursor: 'pointer', textAlign: 'center' }}>
-                    <div style={{ fontSize: '12px', fontWeight: '500', color: '#000' }}>{s.label}</div>
-                    <div style={{ fontSize: '10px', color: '#5a9fd4' }}>{s.oz} oz</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
-              <div style={{ gridColumn: '1/-1' }}>
-                <label style={labelStyle}>Bottle Name</label>
-                <input style={inputStyle} placeholder="Buffalo Trace Bourbon" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
-              </div>
-              <div>
-                <label style={labelStyle}>Category</label>
-                <select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
-                  <option value="">-- Select --</option>
-                  {CATEGORIES.map(c => <option key={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>Bottle Size (oz)</label>
-                <input style={inputStyle} type="number" step="0.01" placeholder="25.36" value={form.bottle_size_oz} onChange={e => setForm(f => ({ ...f, bottle_size_oz: e.target.value }))} />
-              </div>
-              <div>
-                <label style={labelStyle}>Bottle Cost ($)</label>
-                <input style={inputStyle} type="number" step="0.01" placeholder="35.00" value={form.bottle_cost} onChange={e => setForm(f => ({ ...f, bottle_cost: e.target.value }))} />
-              </div>
-              {form.bottle_size_oz > 0 && form.bottle_cost > 0 && (
-                <div style={{ gridColumn: '1/-1', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '10px' }}>
-                  {[
-                    { label: 'Cost/oz', val: fmt(form.bottle_cost / form.bottle_size_oz), color: '#000' },
-                    { label: '@ 20%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.20), color: '#3B6D11' },
-                    { label: '@ 25%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.25), color: '#4a8a1a' },
-                    { label: '@ 30%', val: fmt((form.bottle_cost / form.bottle_size_oz) / 0.30), color: '#e07b00' },
-                  ].map(p => (
-                    <div key={p.label} style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '11px', color: p.color, marginBottom: '3px' }}>{p.label}</div>
-                      <div style={{ fontSize: '18px', fontWeight: '700', color: p.color }}>{p.val}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={saveBottle} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
-                {saving ? 'Saving...' : 'Save Bottle'}
-              </button>
-            </div>
-          </div>
+          <BottleForm
+            form={form}
+            setForm={setForm}
+            saving={saving}
+            isMobile={isMobile}
+            editingId={editingId}
+            onSave={saveBottle}
+            onCancel={() => setShowForm(false)}
+          />
         )}
 
-        {/* Filters */}
+        {/* Category filter */}
         {bottles.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '14px', flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: '12px', color: '#aaa', marginRight: '4px' }}>Filter:</span>
             {categories.map(c => (
-              <button key={c} onClick={() => setFilter(c)} style={{ background: filter === c ? '#F5B800' : '#fff', border: '1px solid', borderColor: filter === c ? '#F5B800' : '#e8e8e8', color: filter === c ? '#000' : '#666', padding: '4px 14px', borderRadius: '20px', fontSize: '12px', cursor: 'pointer', fontWeight: filter === c ? '600' : '400' }}>{c}</button>
+              <button key={c} onClick={() => setFilter(c)}
+                style={{ background: filter === c ? '#F5B800' : '#fff', border: '1px solid', borderColor: filter === c ? '#F5B800' : '#e8e8e8', color: filter === c ? '#000' : '#666', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', cursor: 'pointer', fontWeight: filter === c ? '600' : '400' }}>
+                {c}
+              </button>
             ))}
           </div>
         )}
 
-        {/* Table */}
+        {/* Bottle list */}
         {bottles.length === 0 ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
             No bottles yet. Add your first bottle or import from CSV.
+          </div>
+        ) : isMobile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {filtered.map(b => (
+              <div key={b.id} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                  <div style={{ flex: 1, marginRight: '12px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '2px' }}>{b.name}</div>
+                    <div style={{ fontSize: '11px', color: '#aaa' }}>
+                      {b.category && `${b.category} · `}{b.bottle_size_oz} oz · {fmt(b.bottle_cost)}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
+                    <button onClick={() => openForm(b)} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>Edit</button>
+                    <button onClick={() => deleteBottle(b.id)} style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '6px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>Del</button>
+                  </div>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '8px' }}>
+                  {[
+                    { label: 'Cost/oz', val: fmt(costOz(b)), color: '#555' },
+                    { label: '@ 20%', val: fmt(targetPrice(b, 0.20)), color: '#3B6D11' },
+                    { label: '@ 25%', val: fmt(targetPrice(b, 0.25)), color: '#4a8a1a' },
+                    { label: '@ 30%', val: fmt(targetPrice(b, 0.30)), color: '#e07b00' },
+                  ].map(p => (
+                    <div key={p.label} style={{ textAlign: 'center', background: '#fafafa', borderRadius: '8px', padding: '6px 4px' }}>
+                      <div style={{ fontSize: '9px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>{p.label}</div>
+                      <div style={{ fontSize: '13px', fontWeight: '700', color: p.color }}>{p.val}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
