@@ -9,6 +9,8 @@ export default function Ordering() {
   const [counts, setCounts] = useState({ items: 0, distributors: 0 })
   const [orders, setOrders] = useState([])
   const [pendingOrders, setPendingOrders] = useState([])
+  const [draftOrder, setDraftOrder] = useState(null)
+  const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
 
@@ -32,20 +34,46 @@ export default function Ordering() {
         { count: itemCount },
         { count: distCount },
         { data: orderData },
-        { data: pendingData }
+        { data: pendingData },
+        { data: draftData },
+        { data: readyData },
       ] = await Promise.all([
         supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true),
         supabase.from('distributors').select('*', { count: 'exact', head: true }).eq('user_id', session.user.id),
-        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'foh').neq('receiving_status', 'pending').order('submitted_at', { ascending: false }).limit(20),
-        supabase.from('orders').select('*, order_lines(*)').eq('user_id', session.user.id).eq('area', 'foh').eq('receiving_status', 'pending').order('submitted_at', { ascending: true })
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'foh').eq('status', 'submitted').order('submitted_at', { ascending: false }).limit(20),
+        supabase.from('orders').select('*, order_lines(*)').eq('user_id', session.user.id).eq('area', 'foh').eq('status', 'submitted').eq('receiving_status', 'pending').order('submitted_at', { ascending: true }),
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'foh').eq('status', 'draft').order('created_at', { ascending: false }).limit(1).single(),
+        supabase.from('orders').select('*, order_lines(count)').eq('user_id', session.user.id).eq('area', 'foh').eq('status', 'ready').order('created_at', { ascending: false }).limit(1).single(),
       ])
       setCounts({ items: itemCount || 0, distributors: distCount || 0 })
       setOrders(orderData || [])
       setPendingOrders(pendingData || [])
+      setDraftOrder(draftData || null)
+      setReadyOrder(readyData || null)
       setLoading(false)
     }
     init()
   }, [])
+
+  const discardDraft = async () => {
+    if (!draftOrder) return
+    if (!confirm('Discard this draft order? This cannot be undone.')) return
+    await supabase.from('order_lines').delete().eq('order_id', draftOrder.id)
+    await supabase.from('orders').delete().eq('id', draftOrder.id)
+    setDraftOrder(null)
+  }
+
+  const discardReady = async () => {
+    if (!readyOrder) return
+    if (!confirm('Discard this ready order? This cannot be undone.')) return
+    await supabase.from('order_lines').delete().eq('order_id', readyOrder.id)
+    await supabase.from('orders').delete().eq('id', readyOrder.id)
+    setReadyOrder(null)
+  }
+
+  const resumeOrder = (order) => {
+    router.push(`/foh/ordering/order?resume=${order.id}`)
+  }
 
   const isOverdue = (order) => {
     const days = (new Date() - new Date(order.submitted_at)) / (1000 * 60 * 60 * 24)
@@ -102,7 +130,7 @@ export default function Ordering() {
         </div>
 
         {/* Tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: isMobile ? '10px' : '20px', marginBottom: '32px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: isMobile ? '10px' : '20px', marginBottom: '28px' }}>
           {tiles.map(t => (
             <div key={t.title} onClick={() => router.push(t.href)}
               style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '14px', padding: isMobile ? '16px 10px' : '32px 24px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s, box-shadow .15s' }}
@@ -114,6 +142,57 @@ export default function Ordering() {
             </div>
           ))}
         </div>
+
+        {/* Draft order banner */}
+        {draftOrder && (
+          <div style={{ background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '12px', padding: isMobile ? '14px' : '16px 20px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: '#854F0B', marginBottom: '2px' }}>
+                📝 Draft order in progress
+              </div>
+              <div style={{ fontSize: '12px', color: '#a07800' }}>
+                Started {draftOrder.created_at ? new Date(draftOrder.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--'}
+                {draftOrder.order_lines?.[0]?.count > 0 && ` · ${draftOrder.order_lines[0].count} items`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              <button onClick={discardDraft}
+                style={{ background: 'none', border: '1px solid #f0c080', color: '#a07800', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                Discard
+              </button>
+              <button onClick={() => resumeOrder(draftOrder)}
+                style={{ background: '#854F0B', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                Resume →
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Ready order banner */}
+        {readyOrder && (
+          <div style={{ background: '#EAF3DE', border: '1px solid #97C459', borderRadius: '12px', padding: isMobile ? '14px' : '16px 20px', marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: '#27500A', marginBottom: '2px' }}>
+                ✓ Order ready to send
+              </div>
+              <div style={{ fontSize: '12px', color: '#3B6D11' }}>
+                Built {readyOrder.created_at ? new Date(readyOrder.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '--'}
+                {readyOrder.order_lines?.[0]?.count > 0 && ` · ${readyOrder.order_lines[0].count} items`}
+                {!isMobile && ' · Ready to submit to your distributors'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              <button onClick={discardReady}
+                style={{ background: 'none', border: '1px solid #97C459', color: '#3B6D11', padding: '6px 10px', borderRadius: '8px', fontSize: '11px', cursor: 'pointer' }}>
+                Discard
+              </button>
+              <button onClick={() => resumeOrder(readyOrder)}
+                style={{ background: '#3B6D11', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>
+                Review & Submit →
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Pending receiving queue */}
         {pendingOrders.length > 0 && (
@@ -130,16 +209,7 @@ export default function Ordering() {
                 const distributors = [...new Set(order.order_lines?.map(l => l.distributor_name).filter(Boolean))]
                 return (
                   <div key={order.id}
-                    style={{
-                      background: overdue ? '#fff8f8' : '#fffdf5',
-                      border: `1px solid ${overdue ? '#fca5a5' : '#f0d060'}`,
-                      borderRadius: '12px',
-                      padding: isMobile ? '14px' : '16px 20px',
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      gap: '12px'
-                    }}>
+                    style={{ background: overdue ? '#fff8f8' : '#fffdf5', border: `1px solid ${overdue ? '#fca5a5' : '#f0d060'}`, borderRadius: '12px', padding: isMobile ? '14px' : '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px' }}>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: '13px', fontWeight: '600', color: '#000', marginBottom: '4px' }}>
                         {order.submitted_at ? new Date(order.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '--'}
@@ -150,8 +220,7 @@ export default function Ordering() {
                         {!isMobile && distributors.length > 0 && ` · ${distributors.join(', ')}`}
                       </div>
                     </div>
-                    <button
-                      onClick={() => router.push(`/foh/ordering/receive/${order.id}`)}
+                    <button onClick={() => router.push(`/foh/ordering/receive/${order.id}`)}
                       style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }}>
                       {isMobile ? 'Confirm →' : 'Confirm Delivery →'}
                     </button>
@@ -163,7 +232,7 @@ export default function Ordering() {
         )}
 
         {/* Order history */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '12px', marginTop: pendingOrders.length > 0 ? '0' : '4px' }}>
           <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Order History</div>
         </div>
 
@@ -172,7 +241,6 @@ export default function Ordering() {
             No completed orders yet. Build your first order above.
           </div>
         ) : isMobile ? (
-          // Mobile: card layout
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             {orders.map(order => {
               const badge = statusBadge(order.receiving_status)
@@ -198,7 +266,6 @@ export default function Ordering() {
             })}
           </div>
         ) : (
-          // Desktop: table layout
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>

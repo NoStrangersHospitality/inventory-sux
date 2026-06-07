@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 export default function Order() {
   const [items, setItems] = useState([])
@@ -13,7 +13,10 @@ export default function Order() {
   const [orderRows, setOrderRows] = useState({})
   const [recapRows, setRecapRows] = useState({})
   const [submitting, setSubmitting] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  const [draftOrder, setDraftOrder] = useState(null)
+  const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
 
@@ -70,8 +73,77 @@ export default function Order() {
         supabase.from('inventory_items').select('*').eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true).order('name'),
         supabase.from('distributors').select('*').eq('user_id', session.user.id).order('name')
       ])
-      setItems(itemData || [])
-      setDistributors(distData || [])
+      const fetchedItems = itemData || []
+      const fetchedDists = distData || []
+      setItems(fetchedItems)
+      setDistributors(fetchedDists)
+
+      // Check for resume param
+      const resumeId = new URLSearchParams(window.location.search).get('resume')
+      if (resumeId) {
+        const { data: existingOrder } = await supabase
+          .from('orders')
+          .select('*')
+          .eq('id', resumeId)
+          .eq('user_id', session.user.id)
+          .single()
+
+        if (existingOrder) {
+          const { data: lines } = await supabase
+            .from('order_lines')
+            .select('*')
+            .eq('order_id', existingOrder.id)
+
+          if (lines && lines.length > 0) {
+            const byDist = {}
+            lines.forEach(line => {
+              const key = line.distributor_name || 'Unassigned'
+              if (!byDist[key]) byDist[key] = []
+              const item = fetchedItems.find(i => i.id === line.item_id)
+              if (!item) return
+              const dist = fetchedDists.find(d => d.id === line.distributor_id)
+              const catLabel = [
+                { key: 'liquor', label: 'Liquor' },
+                { key: 'beer', label: 'Beer' },
+                { key: 'wine', label: 'Wine' },
+                { key: 'misc', label: 'Misc' },
+              ].find(c => c.key === item.category)?.label || item.category
+              byDist[key].push({
+                ...item,
+                catLabel,
+                distName: key,
+                distObj: dist,
+                on_hand_count: line.shelf_count || 0,
+                suggested: line.suggested_qty || 0,
+                line_id: line.id,
+              })
+            })
+
+            if (existingOrder.status === 'draft') {
+              setDraftOrder(existingOrder)
+              setOrderRows(byDist)
+              setStep('sheet')
+            } else if (existingOrder.status === 'ready') {
+              setReadyOrder(existingOrder)
+              // Build recap rows from lines
+              const rd = {}
+              Object.keys(byDist).forEach(dn => {
+                const needed = byDist[dn].filter(r => r.suggested > 0)
+                if (needed.length) rd[dn] = needed.map(r => ({
+                  ...r,
+                  overrideQty: r.suggested,
+                  finalQty: r.suggested,
+                  orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
+                }))
+              })
+              setOrderRows(byDist)
+              setRecapRows(rd)
+              setStep('recap')
+            }
+          }
+        }
+      }
+
       setLoading(false)
     }
     init()
@@ -112,6 +184,34 @@ export default function Order() {
     setStep('sheet')
   }
 
+  // Resume a draft order — load order_lines back into orderRows
+  const resumeDraft = async (order) => {
+    const { data: lines } = await supabase.from('order_lines').select('*').eq('order_id', order.id)
+    if (!lines || lines.length === 0) { setStep('sheet'); return }
+
+    const byDist = {}
+    lines.forEach(line => {
+      const key = line.distributor_name || 'Unassigned'
+      if (!byDist[key]) byDist[key] = []
+      const item = items.find(i => i.id === line.item_id)
+      if (!item) return
+      const dist = distributors.find(d => d.id === line.distributor_id)
+      const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
+      byDist[key].push({
+        ...item,
+        catLabel,
+        distName: key,
+        distObj: dist,
+        on_hand_count: line.shelf_count || 0,
+        suggested: line.suggested_qty || 0,
+        line_id: line.id,
+      })
+    })
+    setDraftOrder(order)
+    setOrderRows(byDist)
+    setStep('sheet')
+  }
+
   const updateRow = async (distName, idx, field, val) => {
     setOrderRows(prev => {
       const next = { ...prev }
@@ -133,6 +233,76 @@ export default function Order() {
         await supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
       }
     }
+
+    // If draft exists, update the order_line in real time
+    if (draftOrder) {
+      const row = orderRows[distName][idx]
+      if (row?.line_id) {
+        const updateData = {}
+        if (field === 'on_hand_count') updateData.shelf_count = parseFloat(val) || 0
+        if (field === 'par') updateData.par = parseFloat(val) || 0
+        if (Object.keys(updateData).length) {
+          await supabase.from('order_lines').update(updateData).eq('id', row.line_id)
+        }
+      }
+    }
+  }
+
+  // Save as draft — creates order + lines in DB
+  const saveDraft = async () => {
+    setSaving(true)
+    const { data: { session } } = await supabase.auth.getSession()
+
+    let order = draftOrder
+    if (!order) {
+      const { data: newOrder } = await supabase.from('orders').insert({
+        user_id: session.user.id,
+        status: 'draft',
+        area: 'foh',
+        receiving_status: 'pending',
+        created_at: new Date().toISOString()
+      }).select().single()
+      order = newOrder
+      setDraftOrder(order)
+    } else {
+      await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
+
+    const lines = []
+    Object.keys(orderRows).forEach(dn => {
+      orderRows[dn].forEach(row => {
+        lines.push({
+          order_id: order.id,
+          user_id: session.user.id,
+          item_id: row.id,
+          item_name: row.name,
+          unit: row.unit || '',
+          distributor_id: row.distributor_id || null,
+          distributor_name: dn,
+          par: row.par || 0,
+          shelf_count: row.on_hand_count || 0,
+          well_count: 0,
+          suggested_qty: row.suggested,
+          final_qty: row.suggested,
+          category: row.category,
+        })
+      })
+    })
+
+    const { data: insertedLines } = await supabase.from('order_lines').insert(lines).select()
+    // Attach line_ids back to orderRows for real-time updates
+    const updatedRows = { ...orderRows }
+    insertedLines?.forEach(line => {
+      const distRows = updatedRows[line.distributor_name]
+      if (!distRows) return
+      const idx = distRows.findIndex(r => r.id === line.item_id)
+      if (idx >= 0) updatedRows[line.distributor_name][idx].line_id = line.id
+    })
+    setOrderRows(updatedRows)
+
+    setSaving(false)
+    router.push('/foh/ordering')
   }
 
   const buildRecap = () => {
@@ -171,6 +341,53 @@ export default function Order() {
     })
   }
 
+  // Mark as Ready — saves recap to DB, no emails sent
+  const markAsReady = async () => {
+    setSaving(true)
+    const { data: { session } } = await supabase.auth.getSession()
+
+    let order = draftOrder || readyOrder
+    if (!order) {
+      const { data: newOrder } = await supabase.from('orders').insert({
+        user_id: session.user.id,
+        status: 'ready',
+        area: 'foh',
+        receiving_status: 'pending',
+        created_at: new Date().toISOString()
+      }).select().single()
+      order = newOrder
+    } else {
+      await supabase.from('orders').update({ status: 'ready' }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
+
+    const lines = []
+    Object.keys(recapRows).forEach(dn => {
+      recapRows[dn].forEach(row => {
+        lines.push({
+          order_id: order.id,
+          user_id: session.user.id,
+          item_id: row.id,
+          item_name: row.name,
+          unit: row.orderUnit || row.unit || '',
+          distributor_id: row.distributor_id || null,
+          distributor_name: dn,
+          par: row.par || 0,
+          shelf_count: row.on_hand_count || 0,
+          well_count: 0,
+          suggested_qty: row.suggested,
+          final_qty: row.finalQty,
+          category: row.category,
+        })
+      })
+    })
+
+    await supabase.from('order_lines').insert(lines)
+    setReadyOrder(order)
+    setSaving(false)
+    router.push('/foh/ordering')
+  }
+
   const submitOrder = async () => {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
@@ -180,13 +397,23 @@ export default function Order() {
     const barName = profile?.bar_name || 'Your Bar'
     const orderDate = new Date().toLocaleDateString()
 
-    const { data: order } = await supabase.from('orders').insert({
-      user_id: session.user.id,
-      status: 'submitted',
-      area: 'foh',
-      receiving_status: 'pending',
-      submitted_at: new Date().toISOString()
-    }).select().single()
+    let order = draftOrder || readyOrder
+    if (!order) {
+      const { data: newOrder } = await supabase.from('orders').insert({
+        user_id: session.user.id,
+        status: 'submitted',
+        area: 'foh',
+        receiving_status: 'pending',
+        submitted_at: new Date().toISOString()
+      }).select().single()
+      order = newOrder
+    } else {
+      await supabase.from('orders').update({
+        status: 'submitted',
+        submitted_at: new Date().toISOString()
+      }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
 
     const lines = []
     Object.keys(recapRows).forEach(dn => {
@@ -341,10 +568,18 @@ export default function Order() {
         {/* STEP 2 — Order Sheet */}
         {step === 'sheet' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Sheet</h1>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+              <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Order Sheet</h1>
+              {draftOrder && (
+                <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>
+                  Draft saved
+                </span>
+              )}
+            </div>
             <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#a07800' }}>
               💡 Enter what you have on hand — suggested qty calculates automatically.
             </div>
+
             {Object.keys(orderRows).map(dn => {
               const dist = distributors.find(d => d.name === dn)
               return (
@@ -356,7 +591,6 @@ export default function Order() {
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      // Mobile: card per item
                       orderRows[dn].map((row, ri) => (
                         <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
                           <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>
@@ -368,13 +602,13 @@ export default function Order() {
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
                               <input type="number" min="0" defaultValue={row.par || 0}
                                 onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
-                                style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '14px', background: '#fafafa' }} />
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>On Hand</div>
                               <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count}
                                 onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
-                                style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '14px', background: '#fffbe6', fontWeight: '600' }} />
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
                             </div>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Suggested</div>
@@ -384,7 +618,6 @@ export default function Order() {
                         </div>
                       ))
                     ) : (
-                      // Desktop: table
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
                           <tr>
@@ -422,10 +655,18 @@ export default function Order() {
                 </div>
               )
             })}
-            <button onClick={buildRecap}
-              style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer', marginTop: '8px' }}>
-              Review Order →
-            </button>
+
+            {/* Sheet action buttons */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginTop: '8px' }}>
+              <button onClick={saveDraft} disabled={saving}
+                style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                {saving ? 'Saving...' : '💾 Save Draft'}
+              </button>
+              <button onClick={buildRecap}
+                style={{ background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+                Review Order →
+              </button>
+            </div>
           </>
         )}
 
@@ -433,7 +674,8 @@ export default function Order() {
         {step === 'recap' && (
           <>
             <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Recap</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Adjust quantities and units if needed, then submit.</p>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Adjust quantities and units if needed.</p>
+
             {Object.keys(recapRows).map(dn => {
               const dist = distributors.find(d => d.name === dn)
               return (
@@ -445,7 +687,6 @@ export default function Order() {
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      // Mobile: card per item
                       recapRows[dn].map((row, ri) => {
                         const unitOptions = getUnitOptions(row)
                         const canSwitch = canSwitchUnit(row)
@@ -474,7 +715,7 @@ export default function Order() {
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Unit</div>
                                 {canSwitch && unitOptions.length > 1 ? (
                                   <select value={row.orderUnit} onChange={e => updateRecapUnit(dn, ri, e.target.value)}
-                                    style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '14px', background: '#fafafa', color: '#000' }}>
+                                    style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', color: '#000' }}>
                                     {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
                                   </select>
                                 ) : (
@@ -489,7 +730,6 @@ export default function Order() {
                         )
                       })
                     ) : (
-                      // Desktop: table
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
                           <tr>
@@ -539,10 +779,18 @@ export default function Order() {
                 </div>
               )
             })}
-            <button onClick={submitOrder} disabled={submitting}
-              style={{ width: '100%', background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer', marginTop: '8px' }}>
-              {submitting ? 'Submitting...' : '✉️ Submit Order'}
-            </button>
+
+            {/* Recap action buttons */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '8px' }}>
+              <button onClick={markAsReady} disabled={saving}
+                style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                {saving ? 'Saving...' : '✓ Mark as Ready'}
+              </button>
+              <button onClick={submitOrder} disabled={submitting}
+                style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
+                {submitting ? 'Submitting...' : '✉️ Submit Order'}
+              </button>
+            </div>
           </>
         )}
       </div>
