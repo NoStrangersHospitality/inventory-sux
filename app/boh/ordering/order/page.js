@@ -1,10 +1,10 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
-export default function BOHOrder() {
+function BOHOrder() {
   const [items, setItems] = useState([])
   const [vendors, setVendors] = useState([])
   const [loading, setLoading] = useState(true)
@@ -19,6 +19,7 @@ export default function BOHOrder() {
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -74,21 +75,14 @@ export default function BOHOrder() {
       setItems(fetchedItems)
       setVendors(fetchedVendors)
 
-      // Check for resume param
-      const resumeId = new URLSearchParams(window.location.search).get('resume')
+      const resumeId = searchParams.get('resume')
       if (resumeId) {
         const { data: existingOrder } = await supabase
-          .from('orders')
-          .select('*')
-          .eq('id', resumeId)
-          .eq('user_id', session.user.id)
-          .single()
+          .from('orders').select('*').eq('id', resumeId).eq('user_id', session.user.id).single()
 
         if (existingOrder) {
           const { data: lines } = await supabase
-            .from('order_lines')
-            .select('*')
-            .eq('order_id', existingOrder.id)
+            .from('order_lines').select('*').eq('order_id', existingOrder.id)
 
           if (lines && lines.length > 0) {
             const byVendor = {}
@@ -100,10 +94,7 @@ export default function BOHOrder() {
               const vendor = fetchedVendors.find(v => v.id === line.distributor_id)
               const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
               byVendor[key].push({
-                ...item,
-                catLabel,
-                vendorName: key,
-                vendorObj: vendor,
+                ...item, catLabel, vendorName: key, vendorObj: vendor,
                 on_hand_count: line.shelf_count || 0,
                 suggested: line.suggested_qty || 0,
                 line_id: line.id,
@@ -119,12 +110,7 @@ export default function BOHOrder() {
               const rd = {}
               Object.keys(byVendor).forEach(vn => {
                 const needed = byVendor[vn].filter(r => r.suggested > 0)
-                if (needed.length) rd[vn] = needed.map(r => ({
-                  ...r,
-                  overrideQty: r.suggested,
-                  finalQty: r.suggested,
-                  orderUnit: getDefaultUnit(r)
-                }))
+                if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
               })
               setOrderRows(byVendor)
               setRecapRows(rd)
@@ -137,7 +123,7 @@ export default function BOHOrder() {
       setLoading(false)
     }
     init()
-  }, [])
+  }, [searchParams])
 
   const toggleCat = (cat) => {
     setSelectedCats(prev => {
@@ -150,24 +136,15 @@ export default function BOHOrder() {
   const buildOrderSheet = () => {
     const allItems = []
     CATEGORIES.filter(c => selectedCats.has(c.key)).forEach(c => {
-      items.filter(i => i.category === c.key).forEach(item => {
-        allItems.push({ ...item, catLabel: c.label })
-      })
+      items.filter(i => i.category === c.key).forEach(item => allItems.push({ ...item, catLabel: c.label }))
     })
     if (!allItems.length) { alert('No items in selected categories.'); return }
-
     const byVendor = {}
     allItems.forEach(item => {
       const vendor = vendors.find(v => v.id === item.distributor_id)
       const key = vendor ? vendor.name : 'Unassigned'
       if (!byVendor[key]) byVendor[key] = []
-      byVendor[key].push({
-        ...item,
-        vendorName: key,
-        vendorObj: vendor,
-        on_hand_count: 0,
-        suggested: Math.max(0, Math.ceil(item.par || 0))
-      })
+      byVendor[key].push({ ...item, vendorName: key, vendorObj: vendor, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
     })
     setOrderRows(byVendor)
     setStep('sheet')
@@ -185,26 +162,18 @@ export default function BOHOrder() {
       next[vendorName] = rows
       return next
     })
-
     if (field === 'par') {
       const { data: { session } } = await supabase.auth.getSession()
-      const rows = orderRows[vendorName]
-      const row = rows[idx]
-      if (row?.id) {
-        await supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
-      }
+      const row = orderRows[vendorName][idx]
+      if (row?.id) await supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
     }
-
-    // Real-time update if draft exists
     if (draftOrder) {
       const row = orderRows[vendorName][idx]
       if (row?.line_id) {
         const updateData = {}
         if (field === 'on_hand_count') updateData.shelf_count = parseFloat(val) || 0
         if (field === 'par') updateData.par = parseFloat(val) || 0
-        if (Object.keys(updateData).length) {
-          await supabase.from('order_lines').update(updateData).eq('id', row.line_id)
-        }
+        if (Object.keys(updateData).length) await supabase.from('order_lines').update(updateData).eq('id', row.line_id)
       }
     }
   }
@@ -212,15 +181,11 @@ export default function BOHOrder() {
   const saveDraft = async () => {
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-
     let order = draftOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id,
-        status: 'draft',
-        area: 'boh',
-        receiving_status: 'pending',
-        created_at: new Date().toISOString()
+        user_id: session.user.id, status: 'draft', area: 'boh',
+        receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
       order = newOrder
       setDraftOrder(order)
@@ -228,28 +193,17 @@ export default function BOHOrder() {
       await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
       await supabase.from('order_lines').delete().eq('order_id', order.id)
     }
-
     const lines = []
     Object.keys(orderRows).forEach(vn => {
       orderRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id,
-          user_id: session.user.id,
-          item_id: row.id,
-          item_name: row.name,
-          unit: row.unit || '',
-          distributor_id: row.distributor_id || null,
-          distributor_name: vn,
-          par: row.par || 0,
-          shelf_count: row.on_hand_count || 0,
-          well_count: 0,
-          suggested_qty: row.suggested,
-          final_qty: row.suggested,
-          category: row.category,
+          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          unit: row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.suggested, category: row.category,
         })
       })
     })
-
     const { data: insertedLines } = await supabase.from('order_lines').insert(lines).select()
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
@@ -259,7 +213,6 @@ export default function BOHOrder() {
       if (idx >= 0) updatedRows[line.distributor_name][idx].line_id = line.id
     })
     setOrderRows(updatedRows)
-
     setSaving(false)
     router.push('/boh/ordering')
   }
@@ -268,12 +221,7 @@ export default function BOHOrder() {
     const rd = {}
     Object.keys(orderRows).forEach(vn => {
       const needed = orderRows[vn].filter(r => r.suggested > 0)
-      if (needed.length) rd[vn] = needed.map(r => ({
-        ...r,
-        overrideQty: r.suggested,
-        finalQty: r.suggested,
-        orderUnit: getDefaultUnit(r)
-      }))
+      if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
     })
     if (!Object.keys(rd).length) { alert('No items need ordering.'); return }
     setRecapRows(rd)
@@ -303,43 +251,28 @@ export default function BOHOrder() {
   const markAsReady = async () => {
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-
     let order = draftOrder || readyOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id,
-        status: 'ready',
-        area: 'boh',
-        receiving_status: 'pending',
-        created_at: new Date().toISOString()
+        user_id: session.user.id, status: 'ready', area: 'boh',
+        receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
       order = newOrder
     } else {
       await supabase.from('orders').update({ status: 'ready' }).eq('id', order.id)
       await supabase.from('order_lines').delete().eq('order_id', order.id)
     }
-
     const lines = []
     Object.keys(recapRows).forEach(vn => {
       recapRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id,
-          user_id: session.user.id,
-          item_id: row.id,
-          item_name: row.name,
-          unit: row.orderUnit || row.unit || '',
-          distributor_id: row.distributor_id || null,
-          distributor_name: vn,
-          par: row.par || 0,
-          shelf_count: row.on_hand_count || 0,
-          well_count: 0,
-          suggested_qty: row.suggested,
-          final_qty: row.finalQty,
-          category: row.category,
+          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.finalQty, category: row.category,
         })
       })
     })
-
     await supabase.from('order_lines').insert(lines)
     setReadyOrder(order)
     setSaving(false)
@@ -349,7 +282,6 @@ export default function BOHOrder() {
   const submitOrder = async () => {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
-
     const { data: profile } = await supabase.from('profiles').select('first_name, last_name, bar_name').eq('id', session.user.id).single()
     const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
     const barName = profile?.bar_name || 'Your Bar'
@@ -358,18 +290,12 @@ export default function BOHOrder() {
     let order = draftOrder || readyOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id,
-        status: 'submitted',
-        area: 'boh',
-        receiving_status: 'pending',
-        submitted_at: new Date().toISOString()
+        user_id: session.user.id, status: 'submitted', area: 'boh',
+        receiving_status: 'pending', submitted_at: new Date().toISOString()
       }).select().single()
       order = newOrder
     } else {
-      await supabase.from('orders').update({
-        status: 'submitted',
-        submitted_at: new Date().toISOString()
-      }).eq('id', order.id)
+      await supabase.from('orders').update({ status: 'submitted', submitted_at: new Date().toISOString() }).eq('id', order.id)
       await supabase.from('order_lines').delete().eq('order_id', order.id)
     }
 
@@ -377,29 +303,18 @@ export default function BOHOrder() {
     Object.keys(recapRows).forEach(vn => {
       recapRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id,
-          user_id: session.user.id,
-          item_id: row.id,
-          item_name: row.name,
-          unit: row.orderUnit || row.unit || '',
-          distributor_id: row.distributor_id || null,
-          distributor_name: vn,
-          par: row.par || 0,
-          shelf_count: row.on_hand_count || 0,
-          well_count: 0,
-          suggested_qty: row.suggested,
-          final_qty: row.finalQty
+          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.finalQty
         })
       })
     })
-
     await supabase.from('order_lines').insert(lines)
 
     const vendorGroups = {}
     lines.forEach(line => {
-      if (!vendorGroups[line.distributor_name]) {
-        vendorGroups[line.distributor_name] = { name: line.distributor_name, id: line.distributor_id, lines: [] }
-      }
+      if (!vendorGroups[line.distributor_name]) vendorGroups[line.distributor_name] = { name: line.distributor_name, id: line.distributor_id, lines: [] }
       vendorGroups[line.distributor_name].lines.push(line)
     })
 
@@ -411,25 +326,11 @@ export default function BOHOrder() {
       if (!contact) continue
       const orderLines = group.lines.filter(l => l.final_qty > 0)
       if (orderLines.length === 0) continue
-
       if (contact.email && (contact.order_method?.toLowerCase() === 'email' || contact.order_method?.toLowerCase() === 'both')) {
-        try {
-          await fetch('/api/email/order', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate })
-          })
-        } catch (err) { console.error('Order email failed for', contact.name, err) }
+        try { await fetch('/api/email/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order email failed for', contact.name, err) }
       }
-
       if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
-        try {
-          await fetch('/api/sms/order', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate })
-          })
-        } catch (err) { console.error('Order SMS failed for', contact.name, err) }
+        try { await fetch('/api/sms/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order SMS failed for', contact.name, err) }
       }
     }
 
@@ -438,23 +339,11 @@ export default function BOHOrder() {
         const contact = distContacts?.find(d => d.id === group.id)
         return { name, email: contact?.email || null, lines: group.lines.filter(l => l.final_qty > 0) }
       }).filter(g => g.lines.length > 0)
-
       const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
-
-      const pdfRes = await fetch('/api/orders/generate-pdf', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems })
-      })
-
+      const pdfRes = await fetch('/api/orders/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems }) })
       const pdfData = await pdfRes.json()
-
       if (pdfData.pdfUrl) {
-        await fetch('/api/email/order-confirmation', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems })
-        })
+        await fetch('/api/email/order-confirmation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems }) })
       }
     } catch (err) { console.error('PDF/email confirmation error:', err) }
 
@@ -474,10 +363,7 @@ export default function BOHOrder() {
         <div style={{ fontSize: '52px', marginBottom: '16px' }}>✅</div>
         <h2 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Order submitted!</h2>
         <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your BOH order has been sent to your vendors.</p>
-        <button onClick={() => router.push('/boh/ordering')}
-          style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>
-          ← Back to BOH Ordering
-        </button>
+        <button onClick={() => router.push('/boh/ordering')} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>← Back to BOH Ordering</button>
       </div>
     </div>
   )
@@ -496,7 +382,6 @@ export default function BOHOrder() {
 
       <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
-        {/* STEP 1 — Category Select */}
         {step === 'select' && (
           <>
             <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Build BOH Order</h1>
@@ -515,28 +400,21 @@ export default function BOHOrder() {
                 )
               })}
             </div>
-            <button onClick={buildOrderSheet}
-              style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+            <button onClick={buildOrderSheet} style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
               Build Order Sheet →
             </button>
           </>
         )}
 
-        {/* STEP 2 — Order Sheet */}
         {step === 'sheet' && (
           <>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
               <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>BOH Order Sheet</h1>
-              {draftOrder && (
-                <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>
-                  Draft saved
-                </span>
-              )}
+              {draftOrder && <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>Draft saved</span>}
             </div>
             <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#a07800' }}>
               💡 Enter what you have on hand — suggested qty calculates automatically.
             </div>
-
             {Object.keys(orderRows).map(vn => {
               const vendor = vendors.find(v => v.name === vn)
               return (
@@ -551,20 +429,17 @@ export default function BOHOrder() {
                       orderRows[vn].map((row, ri) => (
                         <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
                           <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>
-                            {row.name}
-                            <span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
+                            {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
-                              <input type="number" min="0" step="0.01" defaultValue={row.par || 0}
-                                onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                              <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                 style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>On Hand</div>
-                              <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count}
-                                onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                              <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
                                 style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
                             </div>
                             <div>
@@ -577,29 +452,22 @@ export default function BOHOrder() {
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr>
-                            {['Item', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
-                              <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
-                            ))}
-                          </tr>
+                          <tr>{['Item', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
+                            <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                          ))}</tr>
                         </thead>
                         <tbody>
                           {orderRows[vn].map((row, ri) => (
                             <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                              <td style={{ padding: '8px 10px', fontSize: '12px' }}>
-                                <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
-                                {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
-                              </td>
+                              <td style={{ padding: '8px 10px', fontSize: '12px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.01" defaultValue={row.par || 0}
-                                  onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                   style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count}
-                                  onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
                                   style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
@@ -612,26 +480,21 @@ export default function BOHOrder() {
                 </div>
               )
             })}
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={saveDraft} disabled={saving}
-                style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              <button onClick={saveDraft} disabled={saving} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : '💾 Save Draft'}
               </button>
-              <button onClick={buildRecap}
-                style={{ background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+              <button onClick={buildRecap} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
                 Review Order →
               </button>
             </div>
           </>
         )}
 
-        {/* STEP 3 — Recap */}
         {step === 'recap' && (
           <>
             <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>BOH Order Recap</h1>
             <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Adjust quantities and units if needed.</p>
-
             {Object.keys(recapRows).map(vn => {
               const vendor = vendors.find(v => v.name === vn)
               return (
@@ -662,16 +525,13 @@ export default function BOHOrder() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Order Qty</div>
-                                <input type="number" min="0" step="0.01"
-                                  value={row.overrideQty === 0 ? '' : row.overrideQty}
-                                  onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
+                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
                                   style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
                               </div>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Unit</div>
                                 {canSwitch && unitOptions.length > 1 ? (
-                                  <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)}
-                                    style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '14px', background: '#fafafa', color: '#000' }}>
+                                  <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '14px', background: '#fafafa', color: '#000' }}>
                                     {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
                                   </select>
                                 ) : (
@@ -679,20 +539,16 @@ export default function BOHOrder() {
                                 )}
                               </div>
                             </div>
-                            <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '700', color: '#3B6D11', textAlign: 'right' }}>
-                              Final: {row.finalQty} {row.orderUnit}
-                            </div>
+                            <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '700', color: '#3B6D11', textAlign: 'right' }}>Final: {row.finalQty} {row.orderUnit}</div>
                           </div>
                         )
                       })
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr>
-                            {['Item', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Unit', 'Final'].map((h, i) => (
-                              <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
-                            ))}
-                          </tr>
+                          <tr>{['Item', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Unit', 'Final'].map((h, i) => (
+                            <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                          ))}</tr>
                         </thead>
                         <tbody>
                           {recapRows[vn].map((row, ri) => {
@@ -700,22 +556,17 @@ export default function BOHOrder() {
                             const canSwitch = canSwitchUnit(row)
                             return (
                               <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                                <td style={{ padding: '10px 12px', fontSize: '13px' }}>
-                                  <div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>
-                                  {row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}
-                                </td>
+                                <td style={{ padding: '10px 12px', fontSize: '13px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(2)}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty}
-                                    onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
+                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
                                     style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
                                 </td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                                   {canSwitch && unitOptions.length > 1 ? (
-                                    <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)}
-                                      style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px 8px', fontSize: '12px', color: '#000', cursor: 'pointer' }}>
+                                    <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)} style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px 8px', fontSize: '12px', color: '#000', cursor: 'pointer' }}>
                                       {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
                                     </select>
                                   ) : (
@@ -735,14 +586,11 @@ export default function BOHOrder() {
                 </div>
               )
             })}
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={markAsReady} disabled={saving}
-                style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : '✓ Mark as Ready'}
               </button>
-              <button onClick={submitOrder} disabled={submitting}
-                style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
+              <button onClick={submitOrder} disabled={submitting} style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
                 {submitting ? 'Submitting...' : '✉️ Submit Order'}
               </button>
             </div>
@@ -750,5 +598,17 @@ export default function BOHOrder() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function BOHOrderPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
+      </div>
+    }>
+      <BOHOrder />
+    </Suspense>
   )
 }
