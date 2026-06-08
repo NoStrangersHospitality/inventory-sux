@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 
 export default function Order() {
   const [items, setItems] = useState([])
@@ -79,7 +79,9 @@ export default function Order() {
       setDistributors(fetchedDists)
 
       // Check for resume param
-      const resumeId = new URLSearchParams(window.location.search).get('resume')
+      const resumeId = typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('resume')
+        : null
       if (resumeId) {
         const { data: existingOrder } = await supabase
           .from('orders')
