@@ -68,6 +68,8 @@ function Order() {
 
   useEffect(() => {
     const init = async () => {
+      console.log('ORDER PAGE INIT — searchParams resume:', searchParams.get('resume'))
+      console.log('ORDER PAGE INIT — full href:', window.location.href)
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const [{ data: itemData }, { data: distData }] = await Promise.all([
