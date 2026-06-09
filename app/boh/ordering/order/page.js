@@ -75,6 +75,38 @@ function BOHOrder() {
       setItems(fetchedItems)
       setVendors(fetchedVendors)
 
+      const buildByVendorFromLines = (lineData) => {
+        const byVendor = {}
+        lineData.forEach(line => {
+          const key = line.distributor_name || 'Unassigned'
+          if (!byVendor[key]) byVendor[key] = []
+          const item = fetchedItems.find(i => i.id === line.item_id)
+          if (!item) return
+          const vendor = fetchedVendors.find(v => v.id === line.distributor_id)
+          const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
+          byVendor[key].push({
+            ...item, catLabel, vendorName: key, vendorObj: vendor,
+            on_hand_count: line.shelf_count || 0,
+            suggested: line.suggested_qty || 0,
+            line_id: line.id,
+          })
+        })
+        return byVendor
+      }
+
+      const buildByVendorFromItems = () => {
+        const byVendor = {}
+        CATEGORIES.forEach(c => {
+          fetchedItems.filter(i => i.category === c.key).forEach(item => {
+            const vendor = fetchedVendors.find(v => v.id === item.distributor_id)
+            const key = vendor ? vendor.name : 'Unassigned'
+            if (!byVendor[key]) byVendor[key] = []
+            byVendor[key].push({ ...item, catLabel: c.label, vendorName: key, vendorObj: vendor, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
+          })
+        })
+        return byVendor
+      }
+
       const resumeId = searchParams.get('resume')
       if (resumeId) {
         const { data: existingOrder } = await supabase
@@ -84,38 +116,22 @@ function BOHOrder() {
           const { data: lines } = await supabase
             .from('order_lines').select('*').eq('order_id', existingOrder.id)
 
-          if (lines && lines.length > 0) {
-            const byVendor = {}
-            lines.forEach(line => {
-              const key = line.distributor_name || 'Unassigned'
-              if (!byVendor[key]) byVendor[key] = []
-              const item = fetchedItems.find(i => i.id === line.item_id)
-              if (!item) return
-              const vendor = fetchedVendors.find(v => v.id === line.distributor_id)
-              const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
-              byVendor[key].push({
-                ...item, catLabel, vendorName: key, vendorObj: vendor,
-                on_hand_count: line.shelf_count || 0,
-                suggested: line.suggested_qty || 0,
-                line_id: line.id,
-              })
+          if (existingOrder.status === 'draft') {
+            setDraftOrder(existingOrder)
+            const byVendor = lines && lines.length > 0 ? buildByVendorFromLines(lines) : buildByVendorFromItems()
+            setOrderRows(byVendor)
+            setStep('sheet')
+          } else if (existingOrder.status === 'ready' && lines && lines.length > 0) {
+            setReadyOrder(existingOrder)
+            const byVendor = buildByVendorFromLines(lines)
+            const rd = {}
+            Object.keys(byVendor).forEach(vn => {
+              const needed = byVendor[vn].filter(r => r.suggested > 0)
+              if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
             })
-
-            if (existingOrder.status === 'draft') {
-              setDraftOrder(existingOrder)
-              setOrderRows(byVendor)
-              setStep('sheet')
-            } else if (existingOrder.status === 'ready') {
-              setReadyOrder(existingOrder)
-              const rd = {}
-              Object.keys(byVendor).forEach(vn => {
-                const needed = byVendor[vn].filter(r => r.suggested > 0)
-                if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
-              })
-              setOrderRows(byVendor)
-              setRecapRows(rd)
-              setStep('recap')
-            }
+            setOrderRows(byVendor)
+            setRecapRows(rd)
+            setStep('recap')
           }
         }
       }
@@ -204,7 +220,8 @@ function BOHOrder() {
         })
       })
     })
-    const { data: insertedLines } = await supabase.from('order_lines').insert(lines).select()
+    const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
+    if (linesError) console.error('saveDraft lines error:', linesError)
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
       const vendorRows = updatedRows[line.distributor_name]
