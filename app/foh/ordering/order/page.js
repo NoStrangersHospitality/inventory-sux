@@ -68,8 +68,6 @@ function Order() {
 
   useEffect(() => {
     const init = async () => {
-      console.log('ORDER PAGE INIT — searchParams resume:', searchParams.get('resume'))
-      console.log('ORDER PAGE INIT — full href:', window.location.href)
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const [{ data: itemData }, { data: distData }] = await Promise.all([
@@ -81,52 +79,68 @@ function Order() {
       setItems(fetchedItems)
       setDistributors(fetchedDists)
 
+      const buildByDistFromItems = () => {
+        const byDist = {}
+        CATEGORIES.forEach(c => {
+          fetchedItems.filter(i => i.category === c.key).forEach(item => {
+            const dist = fetchedDists.find(d => d.id === item.distributor_id)
+            const key = dist ? dist.name : 'Unassigned'
+            if (!byDist[key]) byDist[key] = []
+            byDist[key].push({ ...item, catLabel: c.label, distName: key, distObj: dist, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
+          })
+        })
+        return byDist
+      }
+
+      const buildByDistFromLines = (lines) => {
+        const byDist = {}
+        lines.forEach(line => {
+          const key = line.distributor_name || 'Unassigned'
+          if (!byDist[key]) byDist[key] = []
+          const item = fetchedItems.find(i => i.id === line.item_id)
+          if (!item) return
+          const dist = fetchedDists.find(d => d.id === line.distributor_id)
+          const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
+          byDist[key].push({
+            ...item, catLabel, distName: key, distObj: dist,
+            on_hand_count: line.shelf_count || 0,
+            suggested: line.suggested_qty || 0,
+            line_id: line.id,
+          })
+        })
+        return byDist
+      }
+
       const resumeId = searchParams.get('resume')
       if (resumeId) {
         const { data: existingOrder } = await supabase
           .from('orders').select('*').eq('id', resumeId).eq('user_id', session.user.id).single()
 
-        console.log('existingOrder:', existingOrder)
         if (existingOrder) {
           const { data: lines } = await supabase
             .from('order_lines').select('*').eq('order_id', existingOrder.id)
 
-          console.log('lines:', lines)
-          if (lines && lines.length > 0) {
-            const byDist = {}
-            lines.forEach(line => {
-              const key = line.distributor_name || 'Unassigned'
-              if (!byDist[key]) byDist[key] = []
-              const item = fetchedItems.find(i => i.id === line.item_id)
-              if (!item) return
-              const dist = fetchedDists.find(d => d.id === line.distributor_id)
-              const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
-              byDist[key].push({
-                ...item, catLabel, distName: key, distObj: dist,
-                on_hand_count: line.shelf_count || 0,
-                suggested: line.suggested_qty || 0,
-                line_id: line.id,
-              })
+          if (existingOrder.status === 'draft') {
+            setDraftOrder(existingOrder)
+            const byDist = lines && lines.length > 0
+              ? buildByDistFromLines(lines)
+              : buildByDistFromItems()
+            setOrderRows(byDist)
+            setStep('sheet')
+          } else if (existingOrder.status === 'ready' && lines && lines.length > 0) {
+            setReadyOrder(existingOrder)
+            const byDist = buildByDistFromLines(lines)
+            const rd = {}
+            Object.keys(byDist).forEach(dn => {
+              const needed = byDist[dn].filter(r => r.suggested > 0)
+              if (needed.length) rd[dn] = needed.map(r => ({
+                ...r, overrideQty: r.suggested, finalQty: r.suggested,
+                orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
+              }))
             })
-
-            if (existingOrder.status === 'draft') {
-              setDraftOrder(existingOrder)
-              setOrderRows(byDist)
-              setStep('sheet')
-            } else if (existingOrder.status === 'ready') {
-              setReadyOrder(existingOrder)
-              const rd = {}
-              Object.keys(byDist).forEach(dn => {
-                const needed = byDist[dn].filter(r => r.suggested > 0)
-                if (needed.length) rd[dn] = needed.map(r => ({
-                  ...r, overrideQty: r.suggested, finalQty: r.suggested,
-                  orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
-                }))
-              })
-              setOrderRows(byDist)
-              setRecapRows(rd)
-              setStep('recap')
-            }
+            setOrderRows(byDist)
+            setRecapRows(rd)
+            setStep('recap')
           }
         }
       }
@@ -217,7 +231,8 @@ function Order() {
         })
       })
     })
-    const { data: insertedLines } = await supabase.from('order_lines').insert(lines).select()
+    const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
+    if (linesError) console.error('saveDraft lines error:', linesError)
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
       const distRows = updatedRows[line.distributor_name]
