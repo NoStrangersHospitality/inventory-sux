@@ -91,6 +91,7 @@ function Order() {
           const { data: lines } = await supabase
             .from('order_lines').select('*').eq('order_id', existingOrder.id)
 
+          console.log('lines:', lines)
           if (lines && lines.length > 0) {
             const byDist = {}
             lines.forEach(line => {
