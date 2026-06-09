@@ -86,6 +86,7 @@ function Order() {
         const { data: existingOrder } = await supabase
           .from('orders').select('*').eq('id', resumeId).eq('user_id', session.user.id).single()
 
+        console.log('existingOrder:', existingOrder)
         if (existingOrder) {
           const { data: lines } = await supabase
             .from('order_lines').select('*').eq('order_id', existingOrder.id)
