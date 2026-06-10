@@ -218,17 +218,25 @@ function Order() {
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder
+
     if (!order) {
-      const { data: newOrder } = await supabase.from('orders').insert({
+      const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
         user_id: ownerIdToUse, status: 'draft', area: 'foh',
         receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
+      if (orderError || !newOrder) {
+        console.error('saveDraft order insert error:', orderError)
+        setSaving(false)
+        alert('Failed to create draft order. Please try again.')
+        return
+      }
       order = newOrder
       setDraftOrder(order)
     } else {
       await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
       await supabase.from('order_lines').delete().eq('order_id', order.id)
     }
+
     const lines = []
     Object.keys(orderRows).forEach(dn => {
       orderRows[dn].forEach(row => {
@@ -240,8 +248,10 @@ function Order() {
         })
       })
     })
+
     const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
     if (linesError) console.error('saveDraft lines error:', linesError)
+
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
       const distRows = updatedRows[line.distributor_name]
