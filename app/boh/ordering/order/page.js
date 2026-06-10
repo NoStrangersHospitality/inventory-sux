@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, useRef, Suspense } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useRole } from '@/hooks/useRole'
@@ -22,6 +22,7 @@ function BOHOrder() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can, ownerId } = useRole()
+  const initRan = useRef(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -63,13 +64,19 @@ function BOHOrder() {
   }, [])
 
   useEffect(() => {
+    if (ownerId === undefined) return
+    if (initRan.current) return
+    initRan.current = true
+
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      if (ownerId === undefined) return
+
+      const ownerIdToUse = ownerId || session.user.id
+
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
-      const ownerIdToUse = prof?.owner_user_id || session.user.id
+
       const [{ data: itemData }, { data: vendorData }] = await Promise.all([
         supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').eq('on_menu', true).order('name'),
         supabase.from('vendors').select('*').eq('user_id', ownerIdToUse).order('name')
@@ -114,7 +121,7 @@ function BOHOrder() {
       const resumeId = searchParams.get('resume')
       if (resumeId) {
         const { data: existingOrder } = await supabase
-          .from('orders').select('*').eq('id', resumeId).eq('user_id', session.user.id).single()
+          .from('orders').select('*').eq('id', resumeId).eq('user_id', ownerIdToUse).single()
 
         if (existingOrder) {
           const { data: lines } = await supabase
@@ -143,7 +150,7 @@ function BOHOrder() {
       setLoading(false)
     }
     init()
-  }, [searchParams, ownerId])
+  }, [ownerId, searchParams])
 
   const toggleCat = (cat) => {
     setSelectedCats(prev => {
@@ -201,10 +208,11 @@ function BOHOrder() {
   const saveDraft = async () => {
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id, status: 'draft', area: 'boh',
+        user_id: ownerIdToUse, status: 'draft', area: 'boh',
         receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
       order = newOrder
@@ -217,7 +225,7 @@ function BOHOrder() {
     Object.keys(orderRows).forEach(vn => {
       orderRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           unit: row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.suggested, category: row.category,
@@ -272,10 +280,11 @@ function BOHOrder() {
   const markAsReady = async () => {
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder || readyOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id, status: 'ready', area: 'boh',
+        user_id: ownerIdToUse, status: 'ready', area: 'boh',
         receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
       order = newOrder
@@ -287,7 +296,7 @@ function BOHOrder() {
     Object.keys(recapRows).forEach(vn => {
       recapRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.finalQty, category: row.category,
@@ -303,6 +312,7 @@ function BOHOrder() {
   const submitOrder = async () => {
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
     const { data: profile } = await supabase.from('profiles').select('first_name, last_name, bar_name').eq('id', session.user.id).single()
     const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
     const barName = profile?.bar_name || 'Your Bar'
@@ -311,7 +321,7 @@ function BOHOrder() {
     let order = draftOrder || readyOrder
     if (!order) {
       const { data: newOrder } = await supabase.from('orders').insert({
-        user_id: session.user.id, status: 'submitted', area: 'boh',
+        user_id: ownerIdToUse, status: 'submitted', area: 'boh',
         receiving_status: 'pending', submitted_at: new Date().toISOString()
       }).select().single()
       order = newOrder
@@ -324,7 +334,7 @@ function BOHOrder() {
     Object.keys(recapRows).forEach(vn => {
       recapRows[vn].forEach(row => {
         lines.push({
-          order_id: order.id, user_id: session.user.id, item_id: row.id, item_name: row.name,
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.finalQty
@@ -608,15 +618,14 @@ function BOHOrder() {
               )
             })}
             <div style={{ display: 'grid', gridTemplateColumns: can('submit_order') ? '1fr 1fr' : '1fr', gap: '10px', marginTop: '8px' }}>
-  <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : '✓ Mark as Ready'}
               </button>
               {can('submit_order') && (
-    <button onClick={submitOrder} disabled={submitting}
-      style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
-      {submitting ? 'Submitting...' : '✉️ Submit Order'}
-    </button>
-  )}
+                <button onClick={submitOrder} disabled={submitting} style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
+                  {submitting ? 'Submitting...' : '✉️ Submit Order'}
+                </button>
+              )}
             </div>
           </>
         )}
