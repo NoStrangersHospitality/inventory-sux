@@ -1,8 +1,23 @@
-'use client'
+import { createClient } from '@supabase/supabase-js'
+import { NextResponse } from 'next/server'
+import sgMail from '@sendgrid/mail'
 
-import { useEffect, useState, Suspense } from 'react'
-import { createBrowserClient } from '@supabase/ssr'
-import { useRouter, useSearchParams } from 'next/navigation'
+sgMail.setApiKey(process.env.SENDGRID_API_KEY)
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+)
+
+const SEAT_LIMITS = {
+  gm: 1,
+  foh_manager: 1,
+  boh_manager: 1,
+  foh_staff: 2,
+  boh_staff: 2,
+}
+
+const BOH_ROLES = ['boh_manager', 'boh_staff']
 
 const ROLE_LABELS = {
   gm: 'General Manager',
@@ -12,247 +27,144 @@ const ROLE_LABELS = {
   boh_staff: 'BOH Staff',
 }
 
-function AcceptInvite() {
-  const [loading, setLoading] = useState(true)
-  const [invite, setInvite] = useState(null)
-  const [ownerProfile, setOwnerProfile] = useState(null)
-  const [mode, setMode] = useState('login') // 'login' | 'signup'
-  const [form, setForm] = useState({ email: '', password: '', first_name: '', last_name: '', confirmPassword: '' })
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
-  const [isMobile, setIsMobile] = useState(false)
-  const router = useRouter()
-  const searchParams = useSearchParams()
+export async function POST(req) {
+  try {
+    const { email, role, inviterUserId } = await req.json()
 
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  )
+    if (!email || !role || !inviterUserId) {
+      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
+    }
 
-  useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 768)
-    check()
-    window.addEventListener('resize', check)
-    return () => window.removeEventListener('resize', check)
-  }, [])
+    // Get inviter profile to check permissions and get bar name
+    const { data: inviterProfile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', inviterUserId)
+      .single()
 
-  useEffect(() => {
-    const init = async () => {
-      const token = searchParams.get('token')
-      if (!token) { setError('Invalid invite link.'); setLoading(false); return }
+    if (!inviterProfile) {
+      return NextResponse.json({ error: 'Inviter not found' }, { status: 404 })
+    }
 
-      const { data: inviteData } = await supabase
-        .from('team_members')
-        .select('*')
-        .eq('invite_token', token)
-        .eq('status', 'pending')
-        .single()
+    // Determine owner — if inviter is a GM, owner is their owner_user_id
+    const ownerUserId = inviterProfile.owner_user_id || inviterUserId
 
-      if (!inviteData) { setError('This invite link is invalid or has already been used.'); setLoading(false); return }
+    // Check inviter has permission to invite
+    const inviterRole = inviterProfile.team_role
+    if (inviterRole === 'gm') {
+      // GM can invite anyone except another GM
+      if (role === 'gm') {
+        return NextResponse.json({ error: 'GMs cannot invite other GMs' }, { status: 403 })
+      }
+    } else if (inviterRole) {
+      // Non-owner, non-GM roles cannot invite
+      return NextResponse.json({ error: 'You do not have permission to invite team members' }, { status: 403 })
+    }
 
-      // Check 7-day expiry
-      const invitedAt = new Date(inviteData.invited_at)
-      const now = new Date()
-      const daysDiff = (now - invitedAt) / (1000 * 60 * 60 * 24)
-      if (daysDiff > 7) { setError('This invite link has expired. Please ask your manager to send a new invite.'); setLoading(false); return }
-
-      const { data: owner } = await supabase
+    // Check BOH roles require BOH subscription
+    if (BOH_ROLES.includes(role)) {
+      const { data: ownerProfile } = await supabase
         .from('profiles')
-        .select('first_name, last_name, bar_name')
-        .eq('id', inviteData.owner_user_id)
+        .select('boh_access')
+        .eq('id', ownerUserId)
         .single()
-
-      setInvite(inviteData)
-      setOwnerProfile(owner)
-      setForm(f => ({ ...f, email: inviteData.email }))
-      setLoading(false)
+      if (!ownerProfile?.boh_access) {
+        return NextResponse.json({ error: 'BOH roles require a BOH subscription' }, { status: 403 })
+      }
     }
-    init()
-  }, [searchParams])
 
-  const handleAccept = async () => {
-    setError('')
-    setSubmitting(true)
+    // Check seat limits
+    const { data: existingMembers } = await supabase
+      .from('team_members')
+      .select('role, status')
+      .eq('owner_user_id', ownerUserId)
+      .eq('role', role)
+      .in('status', ['pending', 'active'])
 
-    const token = searchParams.get('token')
+    if (existingMembers && existingMembers.length >= SEAT_LIMITS[role]) {
+      return NextResponse.json({
+        error: `You have reached the maximum number of ${ROLE_LABELS[role]} seats (${SEAT_LIMITS[role]})`
+      }, { status: 403 })
+    }
 
-    if (mode === 'signup') {
-      if (!form.first_name || !form.last_name) { setError('Please enter your name.'); setSubmitting(false); return }
-      if (!form.password || form.password.length < 8) { setError('Password must be at least 8 characters.'); setSubmitting(false); return }
-      if (form.password !== form.confirmPassword) { setError('Passwords do not match.'); setSubmitting(false); return }
+    // Check if this email is already invited
+    const { data: existingInvite } = await supabase
+      .from('team_members')
+      .select('id, status')
+      .eq('owner_user_id', ownerUserId)
+      .eq('email', email.toLowerCase())
+      .single()
 
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: form.email,
-        password: form.password,
-      })
+    if (existingInvite && existingInvite.status === 'active') {
+      return NextResponse.json({ error: 'This email is already an active team member' }, { status: 409 })
+    }
 
-      if (signUpError) { setError(signUpError.message); setSubmitting(false); return }
-
-      const newUserId = signUpData.user?.id
-      if (!newUserId) { setError('Failed to create account.'); setSubmitting(false); return }
-
-      // Create profile
-      await supabase.from('profiles').insert({
-        id: newUserId,
-        first_name: form.first_name,
-        last_name: form.last_name,
-        team_role: invite.role,
-        owner_user_id: invite.owner_user_id,
-      })
-
-      // Accept invite
-      await supabase.from('team_members').update({
-        member_user_id: newUserId,
-        status: 'active',
-        accepted_at: new Date().toISOString(),
-        invite_token: null,
-      }).eq('invite_token', token)
-
+    // If pending invite exists, resend it
+    let inviteRow
+    if (existingInvite && existingInvite.status === 'pending') {
+      const { data: updated } = await supabase
+        .from('team_members')
+        .update({ role, invited_at: new Date().toISOString(), invite_token: crypto.randomUUID() })
+        .eq('id', existingInvite.id)
+        .select()
+        .single()
+      inviteRow = updated
     } else {
-      // Login flow
-      if (!form.email || !form.password) { setError('Please enter your email and password.'); setSubmitting(false); return }
-
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email: form.email,
-        password: form.password,
-      })
-
-      if (signInError) { setError('Invalid email or password.'); setSubmitting(false); return }
-
-      const userId = signInData.user?.id
-
-      // Update profile with role and owner
-      await supabase.from('profiles').update({
-        team_role: invite.role,
-        owner_user_id: invite.owner_user_id,
-      }).eq('id', userId)
-
-      // Accept invite
-      await supabase.from('team_members').update({
-        member_user_id: userId,
-        status: 'active',
-        accepted_at: new Date().toISOString(),
-        invite_token: null,
-      }).eq('invite_token', token)
+      // Create new invite
+      const { data: newInvite } = await supabase
+        .from('team_members')
+        .insert({
+          owner_user_id: ownerUserId,
+          email: email.toLowerCase(),
+          role,
+          status: 'pending',
+        })
+        .select()
+        .single()
+      inviteRow = newInvite
     }
 
-    setSubmitting(false)
-    router.push('/dashboard')
+    if (!inviteRow) {
+      return NextResponse.json({ error: 'Failed to create invite' }, { status: 500 })
+    }
+
+    // Send invite email
+    const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL}/invite/accept?token=${inviteRow.invite_token}`
+    const barName = inviterProfile.bar_name || 'your team'
+
+    await sgMail.send({
+      to: email,
+      from: { email: 'noreply@inventorysux.com', name: 'InventorySux' },
+      subject: `You've been invited to join ${barName} on InventorySux`,
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
+          <div style="font-size: 24px; font-weight: 900; font-style: italic; letter-spacing: -1px; margin-bottom: 24px;">
+            <span style="color: #000;">Inventory</span><span style="color: #F5B800;">Sux</span>
+          </div>
+          <h2 style="font-size: 20px; font-weight: 500; color: #000; margin-bottom: 8px;">You're invited</h2>
+          <p style="font-size: 14px; color: #555; line-height: 1.6; margin-bottom: 8px;">
+            <strong>${inviterProfile.first_name} ${inviterProfile.last_name}</strong> has invited you to join 
+            <strong>${barName}</strong> on InventorySux as <strong>${ROLE_LABELS[role]}</strong>.
+          </p>
+          <p style="font-size: 14px; color: #555; line-height: 1.6; margin-bottom: 24px;">
+            Click the button below to accept your invitation. If you don't have an account yet you'll be able to create one.
+          </p>
+          <a href="${inviteUrl}" style="display: inline-block; background: #F5B800; color: #000; font-weight: 700; font-size: 14px; padding: 14px 28px; border-radius: 8px; text-decoration: none; margin-bottom: 24px;">
+            Accept Invitation →
+          </a>
+          <p style="font-size: 12px; color: #aaa; line-height: 1.5;">
+            This invitation will expire in 7 days. If you did not expect this invitation you can safely ignore this email.
+          </p>
+          <p style="font-size: 12px; color: #aaa;">
+            Or copy this link: ${inviteUrl}
+          </p>
+        </div>
+      `
+    })
+
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    console.error('Invite send error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
-
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }
-  const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
-
-  if (loading) return (
-    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
-    </div>
-  )
-
-  if (error && !invite) return (
-    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
-      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '48px 32px', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
-        <div style={{ fontSize: '40px', marginBottom: '16px' }}>⚠️</div>
-        <h2 style={{ fontSize: '18px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Invalid Invite</h2>
-        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '24px' }}>{error}</p>
-        <button onClick={() => router.push('/auth/login')}
-          style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>
-          Go to Login
-        </button>
-      </div>
-    </div>
-  )
-
-  return (
-    <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
-      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px' }}>
-        <div style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px' }}>
-          <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
-        </div>
-      </div>
-
-      <div style={{ padding: isMobile ? '24px 16px' : '40px 24px', maxWidth: '480px', margin: '0 auto' }}>
-
-        {/* Invite card */}
-        <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px' }}>
-          <div style={{ fontSize: '13px', fontWeight: '600', color: '#854F0B', marginBottom: '4px' }}>
-            You've been invited
-          </div>
-          <div style={{ fontSize: '13px', color: '#a07800' }}>
-            <strong>{ownerProfile?.first_name} {ownerProfile?.last_name}</strong> has invited you to join{' '}
-            <strong>{ownerProfile?.bar_name}</strong> as <strong>{ROLE_LABELS[invite?.role]}</strong>.
-          </div>
-        </div>
-
-        {/* Mode toggle */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '20px' }}>
-          <button onClick={() => setMode('login')}
-            style={{ background: mode === 'login' ? '#000' : '#fff', color: mode === 'login' ? '#fff' : '#555', border: '1px solid #e8e8e8', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-            I have an account
-          </button>
-          <button onClick={() => setMode('signup')}
-            style={{ background: mode === 'signup' ? '#000' : '#fff', color: mode === 'signup' ? '#fff' : '#555', border: '1px solid #e8e8e8', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-            Create account
-          </button>
-        </div>
-
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px' }}>
-
-          {error && (
-            <div style={{ background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: '#854F0B' }}>
-              ⚠ {error}
-            </div>
-          )}
-
-          {mode === 'signup' && (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-              <div>
-                <label style={labelStyle}>First Name</label>
-                <input style={inputStyle} value={form.first_name} onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))} placeholder="First name" />
-              </div>
-              <div>
-                <label style={labelStyle}>Last Name</label>
-                <input style={inputStyle} value={form.last_name} onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))} placeholder="Last name" />
-              </div>
-            </div>
-          )}
-
-          <div style={{ marginBottom: '12px' }}>
-            <label style={labelStyle}>Email</label>
-            <input style={{ ...inputStyle, background: '#f0f0f0', color: '#aaa' }} value={form.email} readOnly />
-          </div>
-
-          <div style={{ marginBottom: '12px' }}>
-            <label style={labelStyle}>Password</label>
-            <input style={inputStyle} type="password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-              placeholder={mode === 'signup' ? 'Min 8 characters' : 'Your password'} />
-          </div>
-
-          {mode === 'signup' && (
-            <div style={{ marginBottom: '12px' }}>
-              <label style={labelStyle}>Confirm Password</label>
-              <input style={inputStyle} type="password" value={form.confirmPassword} onChange={e => setForm(f => ({ ...f, confirmPassword: e.target.value }))} placeholder="Confirm password" />
-            </div>
-          )}
-
-          <button onClick={handleAccept} disabled={submitting}
-            style={{ width: '100%', background: submitting ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer', marginTop: '4px' }}>
-            {submitting ? 'Accepting...' : 'Accept Invitation →'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function AcceptInvitePage() {
-  return (
-    <Suspense fallback={
-      <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
-      </div>
-    }>
-      <AcceptInvite />
-    </Suspense>
-  )
 }
