@@ -242,7 +242,7 @@ function Order() {
       orderRows[dn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.unit || '', distributor_id: row.distributor_id || null, distributor_name: dn,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.suggested,
         })
@@ -315,7 +315,7 @@ function Order() {
       recapRows[dn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: dn,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.finalQty,
         })
@@ -353,7 +353,7 @@ function Order() {
       recapRows[dn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: dn,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
           suggested_qty: row.suggested, final_qty: row.finalQty
         })
