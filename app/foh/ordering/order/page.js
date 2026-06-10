@@ -21,7 +21,7 @@ function Order() {
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
-  const { can } = useRole()
+  const { can, ownerId } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -72,9 +72,11 @@ function Order() {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
+      if (ownerId === undefined) return
+      const ownerIdToUse = ownerId || session.user.id
       const [{ data: itemData }, { data: distData }] = await Promise.all([
-        supabase.from('inventory_items').select('*').eq('user_id', session.user.id).eq('area', 'foh').eq('on_menu', true).order('name'),
-        supabase.from('distributors').select('*').eq('user_id', session.user.id).order('name')
+        supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'foh').eq('on_menu', true).order('name'),
+        supabase.from('distributors').select('*').eq('user_id', ownerIdToUse).order('name')
       ])
       const fetchedItems = itemData || []
       const fetchedDists = distData || []
@@ -150,7 +152,7 @@ function Order() {
       setLoading(false)
     }
     init()
-  }, [searchParams])
+  }, [searchParams, ownerId])
 
   const toggleCat = (cat) => {
     setSelectedCats(prev => {
