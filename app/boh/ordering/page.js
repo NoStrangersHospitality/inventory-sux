@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
+
 
 export default function BOHOrdering() {
   const [loading, setLoading] = useState(true)
@@ -13,6 +15,7 @@ export default function BOHOrdering() {
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
+  const { can } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -105,10 +108,10 @@ export default function BOHOrdering() {
   }
 
   const tiles = [
-    { title: 'Order', desc: 'Build and submit a new order', icon: '📋', href: '/boh/ordering/order' },
-    { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} in catalog`, icon: '🥩', href: '/boh/ordering/items' },
-    { title: 'Vendors', desc: `${counts.vendors} vendor${counts.vendors !== 1 ? 's' : ''} on file`, icon: '🚚', href: '/boh/ordering/vendors' },
-  ]
+  { title: 'Order', desc: 'Build and submit a new order', icon: '📋', href: '/boh/ordering/order', always: true },
+  { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} in catalog`, icon: '🥩', href: '/boh/ordering/items', permission: 'manage_items' },
+  { title: 'Vendors', desc: `${counts.vendors} vendor${counts.vendors !== 1 ? 's' : ''} on file`, icon: '🚚', href: '/boh/ordering/vendors', permission: 'manage_vendors' },
+].filter(t => t.always || can(t.permission))
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

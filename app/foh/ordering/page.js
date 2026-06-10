@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
 export default function Ordering() {
   const [loading, setLoading] = useState(true)
@@ -13,6 +14,7 @@ export default function Ordering() {
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
+  const { can } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -103,10 +105,10 @@ export default function Ordering() {
   }
 
   const tiles = [
-    { title: 'Order', desc: 'Build and submit a new order', icon: '📋', href: '/foh/ordering/order' },
-    { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} on menu`, icon: '🍾', href: '/foh/ordering/items' },
-    { title: 'Distributors', desc: `${counts.distributors} rep${counts.distributors !== 1 ? 's' : ''} on file`, icon: '🚚', href: '/foh/ordering/distributors' },
-  ]
+    { title: 'Order', desc: 'Build and submit a new order', icon: '📋', href: '/foh/ordering/order', always: true },
+    { title: 'Items', desc: `${counts.items} item${counts.items !== 1 ? 's' : ''} on menu`, icon: '🍾', href: '/foh/ordering/items', permission: 'manage_items' },
+    { title: 'Distributors', desc: `${counts.distributors} rep${counts.distributors !== 1 ? 's' : ''} on file`, icon: '🚚', href: '/foh/ordering/distributors', permission: 'manage_distributors' },
+  ].filter(t => t.always || can(t.permission))
 
   if (loading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

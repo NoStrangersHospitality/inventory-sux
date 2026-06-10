@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
 const ROLE_LABELS = {
   gm: 'General Manager',
@@ -41,6 +42,7 @@ export default function Account() {
   const [removingId, setRemovingId] = useState(null)
 
   const router = useRouter()
+  const { can } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -215,8 +217,8 @@ export default function Account() {
 
   const tabs = [
     { key: 'profile', label: 'Profile' },
-    { key: 'team', label: 'Team' },
-    { key: 'billing', label: 'Billing' },
+    ...(can('invite_team') ? [{ key: 'team', label: 'Team' }] : []),
+    ...(can('billing') ? [{ key: 'billing', label: 'Billing' }] : []),
   ]
 
   const availableRoles = profile?.boh_access

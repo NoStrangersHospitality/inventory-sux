@@ -3,6 +3,7 @@
 import { useEffect, useState, Suspense } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
 function BOHOrder() {
   const [items, setItems] = useState([])
@@ -20,6 +21,7 @@ function BOHOrder() {
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { can } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -603,13 +605,16 @@ function BOHOrder() {
                 </div>
               )
             })}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: can('submit_order') ? '1fr 1fr' : '1fr', gap: '10px', marginTop: '8px' }}>
+  <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : '✓ Mark as Ready'}
               </button>
-              <button onClick={submitOrder} disabled={submitting} style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
-                {submitting ? 'Submitting...' : '✉️ Submit Order'}
-              </button>
+              {can('submit_order') && (
+    <button onClick={submitOrder} disabled={submitting}
+      style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
+      {submitting ? 'Submitting...' : '✉️ Submit Order'}
+    </button>
+  )}
             </div>
           </>
         )}
