@@ -3,10 +3,23 @@
 import { useEffect, useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid
 } from 'recharts'
+
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
+        <div style={{ fontWeight: '600', color: '#000', marginBottom: '2px' }}>{label}</div>
+        <div style={{ color: '#F5B800', fontWeight: '700' }}>${Number(payload[0].value).toFixed(2)}</div>
+      </div>
+    )
+  }
+  return null
+}
 
 export default function FOH() {
   const [profile, setProfile] = useState(null)
@@ -17,6 +30,7 @@ export default function FOH() {
   const [topVariance, setTopVariance] = useState([])
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
+  const { role, can, ownerId, loading: roleLoading } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -36,11 +50,18 @@ export default function FOH() {
       if (!session) { router.push('/auth/login'); return }
       const { data } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       setProfile(data)
-      await loadDashboardData(session.user.id)
       setLoading(false)
     }
     getProfile()
   }, [])
+
+  useEffect(() => {
+    if (!roleLoading && !loading) {
+      if (!can('view_foh')) { router.push('/dashboard'); return }
+      const userId = ownerId
+      if (userId) loadDashboardData(userId)
+    }
+  }, [roleLoading, loading, ownerId])
 
   const loadDashboardData = async (userId) => {
     const { data: items } = await supabase
@@ -64,9 +85,7 @@ export default function FOH() {
       const lastSession = sessions?.[0]
 
       setSnapshot({
-        totalValue,
-        lowStock,
-        totalItems: items.length,
+        totalValue, lowStock, totalItems: items.length,
         lastCountDate: lastSession?.count_date || null,
         lastCountValue: lastSession?.total_value || null,
       })
@@ -79,60 +98,38 @@ export default function FOH() {
       ]
       setCategoryData(CATEGORIES.map(c => ({
         name: c.label,
-        value: parseFloat(
-          items.filter(i => i.category === c.key)
-            .reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
-            .toFixed(2)
-        )
+        value: parseFloat(items.filter(i => i.category === c.key).reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0).toFixed(2))
       })).filter(c => c.value > 0))
 
       if (sessions && sessions.length > 1) {
-        setTrendData(
-          [...sessions].reverse().map(s => ({
-            date: new Date(s.count_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-            value: parseFloat((s.total_value || 0).toFixed(2))
-          }))
-        )
+        setTrendData([...sessions].reverse().map(s => ({
+          date: new Date(s.count_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          value: parseFloat((s.total_value || 0).toFixed(2))
+        })))
       }
     }
 
     if (sessions && sessions.length >= 2) {
       const [latest, previous] = sessions
-
-      const { data: latestLines } = await supabase
-        .from('count_lines')
-        .select('inventory_item_id, item_name, quantity, unit_cost')
-        .eq('session_id', latest.id)
-
-      const { data: previousLines } = await supabase
-        .from('count_lines')
-        .select('inventory_item_id, quantity')
-        .eq('session_id', previous.id)
+      const { data: latestLines } = await supabase.from('count_lines').select('inventory_item_id, item_name, quantity, unit_cost').eq('session_id', latest.id)
+      const { data: previousLines } = await supabase.from('count_lines').select('inventory_item_id, quantity').eq('session_id', previous.id)
 
       if (latestLines && previousLines) {
         const latestTotals = {}
         latestLines.forEach(l => {
-          if (!latestTotals[l.inventory_item_id]) {
-            latestTotals[l.inventory_item_id] = { name: l.item_name, qty: 0, unit_cost: l.unit_cost }
-          }
+          if (!latestTotals[l.inventory_item_id]) latestTotals[l.inventory_item_id] = { name: l.item_name, qty: 0, unit_cost: l.unit_cost }
           latestTotals[l.inventory_item_id].qty += parseFloat(l.quantity) || 0
         })
-
         const previousTotals = {}
         previousLines.forEach(l => {
           if (!previousTotals[l.inventory_item_id]) previousTotals[l.inventory_item_id] = 0
           previousTotals[l.inventory_item_id] += parseFloat(l.quantity) || 0
         })
-
         const variances = Object.entries(latestTotals).map(([id, data]) => {
           const prev = previousTotals[id] || 0
           const variance = data.qty - prev
           return { name: data.name, variance, varianceValue: variance * data.unit_cost }
-        })
-          .filter(v => v.variance !== 0)
-          .sort((a, b) => Math.abs(b.varianceValue) - Math.abs(a.varianceValue))
-          .slice(0, 5)
-
+        }).filter(v => v.variance !== 0).sort((a, b) => Math.abs(b.varianceValue) - Math.abs(a.varianceValue)).slice(0, 5)
         setTopVariance(variances)
       }
     }
@@ -141,34 +138,25 @@ export default function FOH() {
   const fmt = (n) => '$' + Number(n).toFixed(2)
   const fmtK = (n) => n >= 1000 ? '$' + (n / 1000).toFixed(1) + 'k' : fmt(n)
 
-  const CustomTooltip = ({ active, payload, label }) => {
-    if (active && payload && payload.length) {
-      return (
-        <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 14px', fontSize: '12px' }}>
-          <div style={{ fontWeight: '600', color: '#000', marginBottom: '2px' }}>{label}</div>
-          <div style={{ color: '#F5B800', fontWeight: '700' }}>{fmt(payload[0].value)}</div>
-        </div>
-      )
-    }
-    return null
-  }
-
-  if (loading) return (
+  if (loading || roleLoading) return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
       <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
     </div>
   )
 
-  const modules = [
-    { title: 'Ordering', desc: 'Items, distributors, and purchase orders', icon: '🛒', href: '/foh/ordering' },
-    { title: 'Pour Cost', desc: 'Bottle cost, price targets, and COG %', icon: '🧮', href: '/foh/pour-cost' },
-    { title: 'COGS', desc: 'Recipe costing and margin analysis', icon: '🧾', href: '/foh/cogs' },
-    { title: 'Inventory', desc: 'On hand, counts, and receiving', icon: '📦', href: '/foh/inventory' },
-    { title: 'Reports', desc: 'Variance, usage, and COGS trends', icon: '📊', href: '/foh/reports' },
+  // Build module tiles based on role
+  const allModules = [
+    { title: 'Ordering', desc: 'Items, distributors, and purchase orders', icon: '🛒', href: '/foh/ordering', permission: 'build_order' },
+    { title: 'Pour Cost', desc: 'Bottle cost, price targets, and COG %', icon: '🧮', href: '/foh/pour-cost', permission: 'manage_items' },
+    { title: 'COGS', desc: 'Recipe costing and margin analysis', icon: '🧾', href: '/foh/cogs', permission: 'manage_items' },
+    { title: 'Inventory', desc: 'On hand, counts, and receiving', icon: '📦', href: '/foh/inventory', permission: 'count' },
+    { title: 'Reports', desc: 'Variance, usage, and COGS trends', icon: '📊', href: '/foh/reports', permission: 'view_reports' },
   ]
+  const modules = allModules.filter(m => can(m.permission))
 
   const hasData = snapshot && snapshot.totalItems > 0
   const hasTrend = trendData.length >= 2
+  const canSeeReports = can('view_reports')
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
@@ -179,9 +167,7 @@ export default function FOH() {
           <span style={{ color: '#F5B800' }}>Sux</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button onClick={() => router.push('/dashboard')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
-            ← Home
-          </button>
+          <button onClick={() => router.push('/dashboard')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Home</button>
           <button onClick={async () => { await supabase.auth.signOut(); router.push('/auth/login') }}
             style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
             {isMobile ? '↩' : 'Log Out'}
@@ -193,11 +179,13 @@ export default function FOH() {
 
         <div style={{ marginBottom: '20px' }}>
           <h1 style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '500', color: '#000' }}>Front of House</h1>
-          <p style={{ color: '#999', fontSize: '14px', marginTop: '4px' }}>Your full bar program in one place.</p>
+          <p style={{ color: '#999', fontSize: '14px', marginTop: '4px' }}>
+            {role === 'foh_staff' ? 'Inventory counts and ordering.' : 'Your full bar program in one place.'}
+          </p>
         </div>
 
-        {/* Snapshot bar */}
-        {hasData && (
+        {/* Snapshot — managers and above only */}
+        {canSeeReports && hasData && (
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: '10px', marginBottom: '20px' }}>
             {[
               { label: 'Inventory Value', val: fmtK(snapshot.totalValue), sub: 'on hand', color: '#F5B800' },
@@ -214,8 +202,8 @@ export default function FOH() {
           </div>
         )}
 
-        {/* Charts row */}
-        {hasData && (categoryData.length > 0 || hasTrend) && (
+        {/* Charts — managers and above only */}
+        {canSeeReports && hasData && (categoryData.length > 0 || hasTrend) && (
           <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : (hasTrend ? '1fr 1fr' : '1fr'), gap: '16px', marginBottom: '20px' }}>
             {categoryData.length > 0 && (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px 20px' }}>
@@ -230,7 +218,6 @@ export default function FOH() {
                 </ResponsiveContainer>
               </div>
             )}
-
             {hasTrend && (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px 20px' }}>
                 <div style={{ fontSize: '13px', fontWeight: '600', color: '#000', marginBottom: '14px' }}>Inventory Value Trend</div>
@@ -248,15 +235,12 @@ export default function FOH() {
           </div>
         )}
 
-        {/* Top variance */}
-        {topVariance.length > 0 && (
+        {/* Top variance — managers and above only */}
+        {canSeeReports && topVariance.length > 0 && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px 20px', marginBottom: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <div style={{ fontSize: '13px', fontWeight: '600', color: '#000' }}>Top Movers — Last Two Counts</div>
-              <button onClick={() => router.push('/foh/reports')}
-                style={{ background: 'none', border: 'none', fontSize: '12px', color: '#F5B800', cursor: 'pointer', fontWeight: '500' }}>
-                Full Report →
-              </button>
+              <button onClick={() => router.push('/foh/reports')} style={{ background: 'none', border: 'none', fontSize: '12px', color: '#F5B800', cursor: 'pointer', fontWeight: '500' }}>Full Report →</button>
             </div>
             {isMobile ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -264,12 +248,8 @@ export default function FOH() {
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', background: '#fafafa', borderRadius: '8px' }}>
                     <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', flex: 1, marginRight: '12px' }}>{item.name}</div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontSize: '13px', fontWeight: '700', color: item.varianceValue >= 0 ? '#3B6D11' : '#E24B4A' }}>
-                        {item.varianceValue >= 0 ? '+' : ''}{fmt(item.varianceValue)}
-                      </div>
-                      <div style={{ fontSize: '11px', color: item.variance >= 0 ? '#3B6D11' : '#E24B4A' }}>
-                        {item.variance >= 0 ? '+' : ''}{item.variance.toFixed(2)} units
-                      </div>
+                      <div style={{ fontSize: '13px', fontWeight: '700', color: item.varianceValue >= 0 ? '#3B6D11' : '#E24B4A' }}>{item.varianceValue >= 0 ? '+' : ''}{fmt(item.varianceValue)}</div>
+                      <div style={{ fontSize: '11px', color: item.variance >= 0 ? '#3B6D11' : '#E24B4A' }}>{item.variance >= 0 ? '+' : ''}{item.variance.toFixed(2)} units</div>
                     </div>
                   </div>
                 ))}
@@ -277,22 +257,16 @@ export default function FOH() {
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
-                  <tr>
-                    {['Item', 'Unit Variance', 'Value Variance'].map((h, i) => (
-                      <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.4px', padding: '6px 10px', borderBottom: '1px solid #f0f0f0' }}>{h}</th>
-                    ))}
-                  </tr>
+                  <tr>{['Item', 'Unit Variance', 'Value Variance'].map((h, i) => (
+                    <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.4px', padding: '6px 10px', borderBottom: '1px solid #f0f0f0' }}>{h}</th>
+                  ))}</tr>
                 </thead>
                 <tbody>
                   {topVariance.map((item, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
                       <td style={{ padding: '9px 10px', fontSize: '13px', fontWeight: '500', color: '#000' }}>{item.name}</td>
-                      <td style={{ padding: '9px 10px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: item.variance >= 0 ? '#3B6D11' : '#E24B4A' }}>
-                        {item.variance >= 0 ? '+' : ''}{item.variance.toFixed(2)}
-                      </td>
-                      <td style={{ padding: '9px 10px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: item.varianceValue >= 0 ? '#3B6D11' : '#E24B4A' }}>
-                        {item.varianceValue >= 0 ? '+' : ''}{fmt(item.varianceValue)}
-                      </td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: item.variance >= 0 ? '#3B6D11' : '#E24B4A' }}>{item.variance >= 0 ? '+' : ''}{item.variance.toFixed(2)}</td>
+                      <td style={{ padding: '9px 10px', textAlign: 'right', fontSize: '13px', fontWeight: '600', color: item.varianceValue >= 0 ? '#3B6D11' : '#E24B4A' }}>{item.varianceValue >= 0 ? '+' : ''}{fmt(item.varianceValue)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -302,7 +276,7 @@ export default function FOH() {
         )}
 
         {/* No data state */}
-        {!hasData && (
+        {canSeeReports && !hasData && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '28px 20px', marginBottom: '20px', textAlign: 'center' }}>
             <div style={{ fontSize: '32px', marginBottom: '10px' }}>📊</div>
             <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '4px' }}>No data yet</div>
@@ -311,15 +285,12 @@ export default function FOH() {
         )}
 
         {/* Module tiles */}
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, 1fr)' : 'repeat(5, 1fr)', gap: isMobile ? '10px' : '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(3, 1fr)' : `repeat(${modules.length}, 1fr)`, gap: isMobile ? '10px' : '16px' }}>
           {modules.map((mod) => (
-            <div
-              key={mod.title}
-              onClick={() => mod.href && router.push(mod.href)}
+            <div key={mod.title} onClick={() => mod.href && router.push(mod.href)}
               style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '14px', padding: isMobile ? '16px 8px' : '28px 16px', textAlign: 'center', cursor: 'pointer', transition: 'border-color 0.15s, box-shadow 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = '#F5B800'; e.currentTarget.style.boxShadow = '0 2px 12px rgba(245,184,0,0.12)' }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8e8e8'; e.currentTarget.style.boxShadow = 'none' }}
-            >
+              onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8e8e8'; e.currentTarget.style.boxShadow = 'none' }}>
               <div style={{ fontSize: isMobile ? '24px' : '32px', marginBottom: '6px' }}>{mod.icon}</div>
               <div style={{ fontSize: isMobile ? '11px' : '14px', fontWeight: '600', color: '#000', marginBottom: isMobile ? '0' : '4px' }}>{mod.title}</div>
               {!isMobile && <div style={{ fontSize: '11px', color: '#aaa', lineHeight: '1.4' }}>{mod.desc}</div>}
