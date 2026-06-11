@@ -64,7 +64,7 @@ function BOHOrder() {
   }, [])
 
   useEffect(() => {
-    if (ownerId === undefined) return
+    if (!ownerId) return
     if (initRan.current) return
     initRan.current = true
 
@@ -210,30 +210,40 @@ function BOHOrder() {
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder
+
     if (!order) {
-      const { data: newOrder } = await supabase.from('orders').insert({
+      const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
         user_id: ownerIdToUse, status: 'draft', area: 'boh',
         receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
+      if (orderError || !newOrder) {
+        console.error('saveDraft order insert error:', orderError)
+        setSaving(false)
+        alert('Failed to create draft order. Please try again.')
+        return
+      }
       order = newOrder
       setDraftOrder(order)
     } else {
       await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
       await supabase.from('order_lines').delete().eq('order_id', order.id)
     }
+
     const lines = []
     Object.keys(orderRows).forEach(vn => {
       orderRows[vn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.suggested, category: row.category,
+          suggested_qty: row.suggested, final_qty: row.suggested,
         })
       })
     })
+
     const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
     if (linesError) console.error('saveDraft lines error:', linesError)
+
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
       const vendorRows = updatedRows[line.distributor_name]
@@ -297,9 +307,9 @@ function BOHOrder() {
       recapRows[vn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty, category: row.category,
+          suggested_qty: row.suggested, final_qty: row.finalQty,
         })
       })
     })
@@ -335,13 +345,15 @@ function BOHOrder() {
       recapRows[vn].forEach(row => {
         lines.push({
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
-          unit: row.orderUnit || row.unit || '', distributor_id: row.distributor_id || null, distributor_name: vn,
+          distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty
+          suggested_qty: row.suggested, final_qty: row.finalQty,
         })
       })
     })
-    await supabase.from('order_lines').insert(lines)
+
+    const { error: linesError } = await supabase.from('order_lines').insert(lines)
+    if (linesError) console.error('Order lines insert error:', linesError)
 
     const vendorGroups = {}
     lines.forEach(line => {
