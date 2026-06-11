@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
 const CATEGORIES = [
   { key: 'proteins', label: 'Proteins', icon: '🥩' },
@@ -103,12 +104,15 @@ export default function BOHInventoryDatabase() {
   const [importing, setImporting] = useState(false)
   const [importPreview, setImportPreview] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [ownerIdResolved, setOwnerIdResolved] = useState(null)
   const [form, setForm] = useState({
     name: '', category: 'proteins', item_type: 'weight',
     on_hand: '', unit: 'lb', unit_cost: '', par: '',
     on_menu: false, notes: '', item_number: ''
   })
   const router = useRouter()
+  const { ownerId } = useRole()
+  const initRan = useRef(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -123,19 +127,25 @@ export default function BOHInventoryDatabase() {
   }, [])
 
   useEffect(() => {
+    if (!ownerId) return
+    if (initRan.current) return
+    initRan.current = true
+
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
-      await loadData(session.user.id)
+      const ownerIdToUse = ownerId || session.user.id
+      setOwnerIdResolved(ownerIdToUse)
+      await loadData(ownerIdToUse)
       setLoading(false)
     }
     init()
-  }, [])
+  }, [ownerId])
 
-  const loadData = async (userId) => {
-    const { data } = await supabase.from('inventory_items').select('*').eq('user_id', userId).eq('area', 'boh').order('name')
+  const loadData = async (ownerIdToUse) => {
+    const { data } = await supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').order('name')
     setItems(data || [])
   }
 
@@ -161,19 +171,20 @@ export default function BOHInventoryDatabase() {
     if (!form.name) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerIdResolved || session.user.id
     const payload = {
       name: form.name, category: form.category, item_type: form.item_type,
       on_hand: parseFloat(form.on_hand) || 0, unit: form.unit,
       unit_cost: parseFloat(form.unit_cost) || 0, par: parseFloat(form.par) || 0,
       on_menu: form.on_menu, notes: form.notes,
-      item_number: form.item_number || null, area: 'boh', user_id: session.user.id
+      item_number: form.item_number || null, area: 'boh', user_id: ownerIdToUse
     }
     if (editingId) {
       await supabase.from('inventory_items').update(payload).eq('id', editingId)
       const original = items.find(i => i.id === editingId)
       if (original && parseFloat(form.on_hand) !== original.on_hand) {
         await supabase.from('inventory_history').insert({
-          user_id: session.user.id, inventory_item_id: editingId,
+          user_id: ownerIdToUse, inventory_item_id: editingId,
           item_name: form.name, category: form.category, area: 'boh',
           event_type: 'manual_adjustment',
           quantity_before: original.on_hand,
@@ -186,7 +197,7 @@ export default function BOHInventoryDatabase() {
     } else {
       await supabase.from('inventory_items').insert(payload)
     }
-    await loadData(session.user.id)
+    await loadData(ownerIdToUse)
     setEditingId(null)
     setShowAddForm(false)
     setSaving(false)
@@ -262,6 +273,7 @@ export default function BOHInventoryDatabase() {
     if (!importPreview) return
     setImporting(true)
     const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerIdResolved || session.user.id
     const existingNames = catItems.map(i => i.name.toLowerCase())
     const toInsert = importPreview.filter(r => !existingNames.includes(r.name.toLowerCase()))
     if (toInsert.length > 0) {
@@ -269,16 +281,16 @@ export default function BOHInventoryDatabase() {
         item_number: r.item_number || null, name: r.name, category: r.category,
         item_type: r.item_type, on_hand: r.on_hand, unit: r.unit,
         unit_cost: r.unit_cost, par: r.par, notes: r.notes,
-        area: 'boh', user_id: session.user.id
+        area: 'boh', user_id: ownerIdToUse
       })))
       const historyRows = toInsert.filter(r => r.on_hand > 0).map(r => ({
-        user_id: session.user.id, item_name: r.name, category: r.category, area: 'boh',
+        user_id: ownerIdToUse, item_name: r.name, category: r.category, area: 'boh',
         event_type: 'csv_import', quantity_before: 0,
         quantity_change: r.on_hand, quantity_after: r.on_hand,
         unit_cost_at_time: r.unit_cost, total_value_at_time: r.on_hand * r.unit_cost
       }))
       if (historyRows.length > 0) await supabase.from('inventory_history').insert(historyRows)
-      await loadData(session.user.id)
+      await loadData(ownerIdToUse)
     }
     setImportPreview(null)
     setImporting(false)
@@ -332,7 +344,6 @@ export default function BOHInventoryDatabase() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '6px', marginBottom: '16px' }}>
           {CATEGORIES.map(c => {
             const count = items.filter(i => i.category === c.key).length
-            const val = items.filter(i => i.category === c.key).reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
             return (
               <div key={c.key} onClick={() => { setActiveCategory(c.key); setImportPreview(null); cancelEdit() }}
                 style={{ background: '#fff', border: `2px solid ${activeCategory === c.key ? '#F5B800' : '#e8e8e8'}`, borderRadius: '10px', padding: isMobile ? '8px 4px' : '12px', cursor: 'pointer', textAlign: 'center' }}>
@@ -367,49 +378,32 @@ export default function BOHInventoryDatabase() {
                 </button>
               </div>
             </div>
-            {isMobile ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {importPreview.map((r, i) => {
-                  const exists = catItems.map(item => item.name.toLowerCase()).includes(r.name.toLowerCase())
-                  return (
-                    <div key={i} style={{ background: '#fafafa', borderRadius: '8px', padding: '10px 12px', border: '1px solid #f0f0f0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{r.name}</div>
-                        <div style={{ fontSize: '11px', color: exists ? '#aaa' : '#3B6D11', fontWeight: '500' }}>{exists ? 'Exists' : '✓ New'}</div>
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#aaa' }}>{r.item_type} · {r.on_hand} on hand · {r.unit_cost ? '$' + r.unit_cost : '--'}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                  <thead>
-                    <tr>{['Item #', 'Name', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'Status'].map((h, i) => (
-                      <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', whiteSpace: 'nowrap' }}>{h}</th>
-                    ))}</tr>
-                  </thead>
-                  <tbody>
-                    {importPreview.map((r, i) => {
-                      const exists = catItems.map(item => item.name.toLowerCase()).includes(r.name.toLowerCase())
-                      return (
-                        <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                          <td style={{ padding: '7px 10px', color: '#aaa', fontSize: '11px' }}>{r.item_number || '--'}</td>
-                          <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
-                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.item_type}</td>
-                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.on_hand}</td>
-                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.unit || '--'}</td>
-                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.unit_cost ? '$' + r.unit_cost : '--'}</td>
-                          <td style={{ padding: '7px 10px', color: '#666' }}>{r.par || '--'}</td>
-                          <td style={{ padding: '7px 10px' }}>{exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span> : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                <thead>
+                  <tr>{['Item #', 'Name', 'Type', 'On Hand', 'Unit', 'Unit Cost', 'Par', 'Status'].map((h, i) => (
+                    <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', whiteSpace: 'nowrap' }}>{h}</th>
+                  ))}</tr>
+                </thead>
+                <tbody>
+                  {importPreview.map((r, i) => {
+                    const exists = catItems.map(item => item.name.toLowerCase()).includes(r.name.toLowerCase())
+                    return (
+                      <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                        <td style={{ padding: '7px 10px', color: '#aaa', fontSize: '11px' }}>{r.item_number || '--'}</td>
+                        <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
+                        <td style={{ padding: '7px 10px', color: '#666' }}>{r.item_type}</td>
+                        <td style={{ padding: '7px 10px', color: '#666' }}>{r.on_hand}</td>
+                        <td style={{ padding: '7px 10px', color: '#666' }}>{r.unit || '--'}</td>
+                        <td style={{ padding: '7px 10px', color: '#666' }}>{r.unit_cost ? '$' + r.unit_cost : '--'}</td>
+                        <td style={{ padding: '7px 10px', color: '#666' }}>{r.par || '--'}</td>
+                        <td style={{ padding: '7px 10px' }}>{exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span> : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
