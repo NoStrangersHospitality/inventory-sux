@@ -70,7 +70,7 @@ function Order() {
   }, [])
 
   useEffect(() => {
-    if (ownerId === undefined) return
+    if (!ownerId) return
     if (initRan.current) return
     initRan.current = true
 
