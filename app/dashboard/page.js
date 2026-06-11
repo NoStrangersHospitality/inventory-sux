@@ -16,7 +16,7 @@ export default function Dashboard() {
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
-  const { role, can, loading: roleLoading } = useRole()
+  const { role, can, ownerId, loading: roleLoading } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -52,10 +52,11 @@ export default function Dashboard() {
       setProfile(prof)
       await loadReplies(session.user.id)
 
+      const ownerIdToUse = prof?.owner_user_id || session.user.id
       const { data: pending } = await supabase
         .from('orders')
         .select('*, order_lines(count)')
-        .eq('user_id', prof?.owner_user_id || session.user.id)
+        .eq('user_id', ownerIdToUse)
         .eq('receiving_status', 'pending')
         .eq('status', 'submitted')
         .order('submitted_at', { ascending: true })
@@ -115,10 +116,11 @@ export default function Dashboard() {
     </div>
   )
 
-  // Role-based FOH/BOH access
   const canFOH = can('view_foh')
-  const canBOH = can('view_boh') && profile?.boh_access
+  // For staff, can('view_boh') is enough — they were explicitly given the role by an owner with BOH access
+  // For owners, also check their own boh_access subscription flag
   const isOwner = role === 'owner'
+  const canBOH = can('view_boh') && (isOwner ? profile?.boh_access : true)
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', overflowX: 'hidden' }}>
@@ -351,6 +353,7 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* BOH upsell — owners without BOH access only */}
           {isOwner && !profile?.boh_access && (
             <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: isMobile ? '24px 20px' : '36px 28px', cursor: 'default', textAlign: 'center', opacity: 0.5 }}>
               <div style={{ fontSize: isMobile ? '32px' : '40px', marginBottom: '10px' }}>🍳</div>
