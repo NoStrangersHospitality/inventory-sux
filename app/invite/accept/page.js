@@ -16,7 +16,7 @@ function AcceptInvite() {
   const [loading, setLoading] = useState(true)
   const [invite, setInvite] = useState(null)
   const [ownerProfile, setOwnerProfile] = useState(null)
-  const [mode, setMode] = useState('login') // 'login' | 'signup'
+  const [mode, setMode] = useState('login')
   const [form, setForm] = useState({ email: '', password: '', first_name: '', last_name: '', confirmPassword: '' })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -50,7 +50,6 @@ function AcceptInvite() {
 
       if (!inviteData) { setError('This invite link is invalid or has already been used.'); setLoading(false); return }
 
-      // Check 7-day expiry
       const invitedAt = new Date(inviteData.invited_at)
       const now = new Date()
       const daysDiff = (now - invitedAt) / (1000 * 60 * 60 * 24)
@@ -81,24 +80,24 @@ function AcceptInvite() {
       if (!form.password || form.password.length < 8) { setError('Password must be at least 8 characters.'); setSubmitting(false); return }
       if (form.password !== form.confirmPassword) { setError('Passwords do not match.'); setSubmitting(false); return }
 
+      // Pass invite metadata into signUp so the DB trigger creates the profile correctly
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: form.email,
         password: form.password,
+        options: {
+          data: {
+            first_name: form.first_name,
+            last_name: form.last_name,
+            team_role: invite.role,
+            owner_user_id: invite.owner_user_id,
+          }
+        }
       })
 
       if (signUpError) { setError(signUpError.message); setSubmitting(false); return }
 
       const newUserId = signUpData.user?.id
       if (!newUserId) { setError('Failed to create account.'); setSubmitting(false); return }
-
-      // Create profile
-      await supabase.from('profiles').insert({
-        id: newUserId,
-        first_name: form.first_name,
-        last_name: form.last_name,
-        team_role: invite.role,
-        owner_user_id: invite.owner_user_id,
-      })
 
       // Accept invite
       await supabase.from('team_members').update({
@@ -121,7 +120,7 @@ function AcceptInvite() {
 
       const userId = signInData.user?.id
 
-      // Update profile with role and owner
+      // Update existing profile with role and owner
       await supabase.from('profiles').update({
         team_role: invite.role,
         owner_user_id: invite.owner_user_id,
@@ -173,7 +172,6 @@ function AcceptInvite() {
 
       <div style={{ padding: isMobile ? '24px 16px' : '40px 24px', maxWidth: '480px', margin: '0 auto' }}>
 
-        {/* Invite card */}
         <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '12px', padding: '16px 20px', marginBottom: '24px' }}>
           <div style={{ fontSize: '13px', fontWeight: '600', color: '#854F0B', marginBottom: '4px' }}>
             You've been invited
@@ -184,7 +182,6 @@ function AcceptInvite() {
           </div>
         </div>
 
-        {/* Mode toggle */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '20px' }}>
           <button onClick={() => setMode('login')}
             style={{ background: mode === 'login' ? '#000' : '#fff', color: mode === 'login' ? '#fff' : '#555', border: '1px solid #e8e8e8', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
