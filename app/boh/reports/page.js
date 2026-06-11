@@ -66,7 +66,7 @@ export default function BOHReports() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      if (!prof?.boh_access) { router.push('/dashboard'); return }
+      if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
       await loadSessions(session.user.id)
       setLoading(false)
     }

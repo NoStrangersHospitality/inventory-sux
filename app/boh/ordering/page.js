@@ -15,7 +15,7 @@ export default function BOHOrdering() {
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const router = useRouter()
-  const { can } = useRole()
+  const { can, ownerId } = useRole()
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -34,7 +34,7 @@ export default function BOHOrdering() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      if (!prof?.boh_access) { router.push('/dashboard'); return }
+      if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
       const [
         { count: itemCount },
         { count: vendorCount },

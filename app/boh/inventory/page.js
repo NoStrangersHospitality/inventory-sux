@@ -27,7 +27,7 @@ export default function BOHInventory() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      if (!prof?.boh_access) { router.push('/dashboard'); return }
+      if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
       const { data: items } = await supabase.from('inventory_items').select('*').eq('user_id', session.user.id).eq('area', 'boh')
       if (items) {
         const totalValue = items.reduce((sum, i) => sum + (i.on_hand * i.unit_cost), 0)
