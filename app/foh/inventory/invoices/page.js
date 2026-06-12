@@ -146,7 +146,7 @@ export default function FOHInvoices() {
     setApproving(true)
     setApprovingId(invoiceId)
     const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerIdResolved || session.user.id
+const ownerIdToUse = ownerId || session.user.id
 
     const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).single()
     const { data: lines } = await supabase.from('invoice_lines').select('*').eq('invoice_id', invoiceId)
