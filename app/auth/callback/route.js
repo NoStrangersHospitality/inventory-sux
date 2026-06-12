@@ -25,7 +25,20 @@ export async function GET(request) {
         },
       }
     )
-    await supabase.auth.exchangeCodeForSession(code)
+
+    const { data: { session } } = await supabase.auth.exchangeCodeForSession(code)
+
+    if (session?.user?.id) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_admin')
+        .eq('id', session.user.id)
+        .single()
+
+      if (profile?.is_admin) {
+        return NextResponse.redirect(new URL('/admin', request.url))
+      }
+    }
   }
 
   return NextResponse.redirect(new URL('/dashboard', request.url))
