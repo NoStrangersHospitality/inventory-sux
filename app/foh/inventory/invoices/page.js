@@ -66,7 +66,7 @@ export default function FOHInvoices() {
     setScanResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const ownerIdToUse = ownerIdResolved || session.user.id
+const ownerIdToUse = ownerId || session.user.id
       const formData = new FormData()
       formData.append('file', file)
       formData.append('userId', ownerIdToUse)
@@ -113,7 +113,7 @@ export default function FOHInvoices() {
     if (!scanResult) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerIdResolved || session.user.id
+const ownerIdToUse = ownerId || session.user.id
 
     // Save all line items to invoice_lines
     const linesToSave = (scanResult.line_items || []).map(line => ({

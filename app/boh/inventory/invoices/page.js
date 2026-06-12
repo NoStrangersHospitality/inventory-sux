@@ -79,7 +79,7 @@ export default function BOHInvoices() {
     setScanResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
-      const ownerIdToUse = ownerIdResolved || session.user.id
+const ownerIdToUse = ownerId || session.user.id
       const formData = new FormData()
       formData.append('file', file)
       formData.append('userId', ownerIdToUse)
@@ -126,7 +126,7 @@ export default function BOHInvoices() {
     if (!scanResult) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerIdResolved || session.user.id
+const ownerIdToUse = ownerId || session.user.id
 
     const linesToSave = (scanResult.line_items || []).map(line => ({
       invoice_id: scanResult.invoice_id,
