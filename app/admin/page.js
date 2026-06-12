@@ -13,6 +13,12 @@ export default function Admin() {
   const [drawerForm, setDrawerForm] = useState({})
   const [saving, setSaving] = useState(false)
   const [confirmChange, setConfirmChange] = useState(null)
+  const [showAddAdmin, setShowAddAdmin] = useState(false)
+  const [addAdminForm, setAddAdminForm] = useState({ first_name: '', last_name: '', email: '' })
+  const [addAdminSaving, setAddAdminSaving] = useState(false)
+  const [addAdminSuccess, setAddAdminSuccess] = useState(false)
+  const [addAdminError, setAddAdminError] = useState('')
+  const [currentUserId, setCurrentUserId] = useState(null)
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -24,6 +30,7 @@ export default function Admin() {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
+      setCurrentUserId(session.user.id)
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.is_admin) { router.push('/dashboard'); return }
       await loadProfiles()
@@ -115,6 +122,36 @@ export default function Admin() {
     setSaving(false)
   }
 
+  const handleAddAdmin = async () => {
+    setAddAdminError('')
+    if (!addAdminForm.first_name || !addAdminForm.last_name || !addAdminForm.email) {
+      setAddAdminError('All fields are required.')
+      return
+    }
+    setAddAdminSaving(true)
+    const res = await fetch('/api/admin/create-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...addAdminForm, requestingUserId: currentUserId })
+    })
+    const data = await res.json()
+    if (data.error) {
+      setAddAdminError(data.error)
+      setAddAdminSaving(false)
+    } else {
+      setAddAdminSuccess(true)
+      setAddAdminSaving(false)
+      await loadProfiles()
+    }
+  }
+
+  const closeAddAdmin = () => {
+    setShowAddAdmin(false)
+    setAddAdminForm({ first_name: '', last_name: '', email: '' })
+    setAddAdminSuccess(false)
+    setAddAdminError('')
+  }
+
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
 
@@ -135,17 +172,69 @@ export default function Admin() {
           </div>
           <div style={{ background: 'rgba(245,184,0,.15)', border: '1px solid rgba(245,184,0,.3)', color: '#F5B800', fontSize: '10px', fontWeight: '700', letterSpacing: '1.5px', textTransform: 'uppercase', padding: '3px 10px', borderRadius: '20px' }}>Admin</div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-  <button onClick={() => router.push('/admin/tickets')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>🎫 Tickets</button>
-  <button onClick={() => router.push('/admin/knowledge-base')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>📖 Knowledge Base</button>
-  <button onClick={() => router.push('/dashboard')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← App</button>
-</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button onClick={() => setShowAddAdmin(true)} style={{ background: '#F5B800', border: 'none', color: '#000', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>+ Add Admin</button>
+          <button onClick={() => router.push('/admin/tickets')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>🎫 Tickets</button>
+          <button onClick={() => router.push('/admin/knowledge-base')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>📖 Knowledge Base</button>
+          <button onClick={() => router.push('/dashboard')} style={{ background: 'none', border: '1px solid rgba(255,255,255,.2)', color: '#aaa', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← App</button>
           <button onClick={async () => { await supabase.auth.signOut(); router.push('/auth/login') }} style={{ background: 'none', border: 'none', color: '#666', fontSize: '12px', cursor: 'pointer' }}>Sign out</button>
         </div>
       </div>
 
       <div style={{ padding: '28px', maxWidth: '1200px', margin: '0 auto' }}>
+
+        {/* Add Admin Modal */}
+        {showAddAdmin && (
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+            <div style={{ background: '#fff', borderRadius: '14px', padding: '28px', width: '100%', maxWidth: '420px', boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}>
+              {addAdminSuccess ? (
+                <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                  <div style={{ fontSize: '48px', marginBottom: '12px' }}>✅</div>
+                  <h3 style={{ fontSize: '18px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Admin created</h3>
+                  <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '24px' }}>
+                    A password setup email has been sent to <strong>{addAdminForm.email}</strong>.
+                  </p>
+                  <button onClick={closeAddAdmin} style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer' }}>Done</button>
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                    <h3 style={{ fontSize: '16px', fontWeight: '500', color: '#000' }}>Add Admin User</h3>
+                    <button onClick={closeAddAdmin} style={{ background: '#333', border: 'none', color: '#fff', width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontSize: '16px' }}>×</button>
+                  </div>
+                  {addAdminError && (
+                    <div style={{ background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: '8px', padding: '10px 14px', color: '#c53030', fontSize: '13px', marginBottom: '16px' }}>
+                      {addAdminError}
+                    </div>
+                  )}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                    <div>
+                      <label style={labelStyle}>First Name</label>
+                      <input style={inputStyle} value={addAdminForm.first_name} onChange={e => setAddAdminForm(f => ({ ...f, first_name: e.target.value }))} placeholder="Ben" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Last Name</label>
+                      <input style={inputStyle} value={addAdminForm.last_name} onChange={e => setAddAdminForm(f => ({ ...f, last_name: e.target.value }))} placeholder="Gordon" />
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: '20px' }}>
+                    <label style={labelStyle}>Email</label>
+                    <input style={inputStyle} type="email" value={addAdminForm.email} onChange={e => setAddAdminForm(f => ({ ...f, email: e.target.value }))} placeholder="ben.gordon@inventorysux.com" />
+                  </div>
+                  <p style={{ fontSize: '12px', color: '#aaa', marginBottom: '16px' }}>
+                    They'll receive an email to set their own password. Their account will have admin access immediately.
+                  </p>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={closeAddAdmin} style={{ flex: 1, background: '#f5f5f3', color: '#555', border: 'none', padding: '11px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+                    <button onClick={handleAddAdmin} disabled={addAdminSaving} style={{ flex: 2, background: addAdminSaving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '11px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: addAdminSaving ? 'not-allowed' : 'pointer' }}>
+                      {addAdminSaving ? 'Creating...' : 'Create Admin →'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: '14px', marginBottom: '24px' }}>
@@ -200,7 +289,10 @@ export default function Admin() {
                     onMouseEnter={e => Array.from(e.currentTarget.cells).forEach(c => c.style.background = '#fffdf0')}
                     onMouseLeave={e => Array.from(e.currentTarget.cells).forEach(c => c.style.background = '')}>
                     <td style={{ padding: '12px 16px' }}>
-                      <div style={{ fontWeight: '500', color: '#000', fontSize: '13px' }}>{p.first_name} {p.last_name}</div>
+                      <div style={{ fontWeight: '500', color: '#000', fontSize: '13px' }}>
+                        {p.first_name} {p.last_name}
+                        {p.is_admin && <span style={{ marginLeft: '6px', background: 'rgba(245,184,0,.15)', color: '#c89000', fontSize: '10px', fontWeight: '700', padding: '1px 6px', borderRadius: '4px', letterSpacing: '0.5px' }}>ADMIN</span>}
+                      </div>
                       <div style={{ fontSize: '11px', color: '#aaa' }}>{p.bar_name || '--'}</div>
                     </td>
                     <td style={{ padding: '12px 16px', color: '#888', fontSize: '12px' }}>{p.city && p.state ? p.city + ', ' + p.state : '--'}</td>
@@ -239,11 +331,13 @@ export default function Admin() {
         {drawer && (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ fontSize: '16px', fontWeight: '500', color: '#000' }}>{drawer.first_name} {drawer.last_name}</h3>
+              <h3 style={{ fontSize: '16px', fontWeight: '500', color: '#000' }}>
+                {drawer.first_name} {drawer.last_name}
+                {drawer.is_admin && <span style={{ marginLeft: '8px', background: 'rgba(245,184,0,.15)', color: '#c89000', fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>ADMIN</span>}
+              </h3>
               <button onClick={closeDrawer} style={{ background: '#333', border: 'none', color: '#fff', width: '28px', height: '28px', borderRadius: '6px', cursor: 'pointer', fontSize: '16px' }}>×</button>
             </div>
 
-            {/* Account info */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '12px', marginBottom: '20px', background: '#fafafa', borderRadius: '8px', padding: '14px', border: '1px solid #f0f0f0' }}>
               {[
                 { label: 'Bar / Restaurant', val: drawer.bar_name || '--' },
@@ -277,7 +371,6 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Comp duration — only shows when status is comp */}
             {drawerForm.subscription_status === 'comp' && (
               <div style={{ background: '#FAEEDA', border: '1px solid #f0c080', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
                 <div style={{ fontSize: '12px', fontWeight: '600', color: '#854F0B', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Comp Duration</div>
@@ -324,7 +417,6 @@ export default function Admin() {
               </div>
             </div>
 
-            {/* Confirm status change */}
             {confirmChange && (
               <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '16px', marginBottom: '16px' }}>
                 <div style={{ fontSize: '13px', fontWeight: '600', color: '#854F0B', marginBottom: '6px' }}>Confirm Status Change</div>
