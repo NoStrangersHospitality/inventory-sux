@@ -78,7 +78,7 @@ export default function FOHInvoices() {
       await supabase.storage.from('invoices').upload(fileName, file)
       const { data: invoice } = await supabase.from('invoices').insert({
         user_id: ownerIdToUse, vendor: data.vendor, invoice_number: data.invoice_number,
-        invoice_date: data.invoice_date, total_amount: data.total_amount, status: 'scanned',
+        invoice_date: data.invoice_date, total_amount: data.total_amount, status: 'processed',
         file_url: fileName, raw_text: JSON.stringify(data.line_items), area: 'foh'
       }).select().single()
       setScanResult({ ...data, invoice_id: invoice.id })
@@ -218,7 +218,6 @@ export default function FOHInvoices() {
   const statusColor = (s) => {
     if (s === 'confirmed') return { bg: '#EAF3DE', color: '#27500A', border: '#97C459' }
     if (s === 'processed') return { bg: '#FAEEDA', color: '#854F0B', border: '#f0c080' }
-    if (s === 'scanned') return { bg: '#E6F1FB', color: '#0C447C', border: '#85B7EB' }
     return { bg: '#f5f5f3', color: '#aaa', border: '#e8e8e8' }
   }
 
