@@ -10,6 +10,7 @@ export default function Distributors() {
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
   const [form, setForm] = useState({ name: '', contact_name: '', email: '', phone: '', order_method: '', minimum_order: '', notes: '' })
   const router = useRouter()
 
@@ -17,6 +18,13 @@ export default function Distributors() {
     process.env.NEXT_PUBLIC_SUPABASE_URL,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   useEffect(() => {
     const init = async () => {
@@ -56,7 +64,7 @@ export default function Distributors() {
     setSaving(false)
   }
 
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '13px', color: '#000', boxSizing: 'border-box' }
+  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
   const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' }
 
   if (loading) return (
@@ -67,28 +75,28 @@ export default function Distributors() {
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
-      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div onClick={() => router.push('/dashboard')} style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
           <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
         </div>
-        <button onClick={() => router.push('/foh/ordering')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 14px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Ordering</button>
+        <button onClick={() => router.push('/foh/ordering')} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>← Ordering</button>
       </div>
 
-      <div style={{ padding: '28px 24px', maxWidth: '1000px', margin: '0 auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+      <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1000px', margin: '0 auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
           <div>
-            <h1 style={{ fontSize: '20px', fontWeight: '500', color: '#000' }}>Distributors</h1>
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Distributors</h1>
             <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Your reps and contacts</p>
           </div>
-          <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '9px 18px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}>
-            + Add Distributor
+          <button onClick={() => openForm()} style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            + Add
           </button>
         </div>
 
         {showForm && (
-          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '24px', marginBottom: '20px' }}>
-            <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '16px' }}>{editingId ? 'Edit Distributor' : 'Add Distributor'}</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+          <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '14px' }}>{editingId ? 'Edit Distributor' : 'Add Distributor'}</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div style={{ gridColumn: '1/-1' }}>
                 <label style={labelStyle}>Distributor Name</label>
                 <input style={inputStyle} placeholder="Republic National" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
@@ -126,8 +134,8 @@ export default function Distributors() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: '10px' }}>
-              <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-              <button onClick={saveDist} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '10px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+              <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={saveDist} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : 'Save Distributor'}
               </button>
             </div>
@@ -137,6 +145,29 @@ export default function Distributors() {
         {distributors.length === 0 ? (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>
             No distributors yet. Add your first rep to get started.
+          </div>
+        ) : isMobile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {distributors.map(d => (
+              <div key={d.id} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                  <div style={{ flex: 1, marginRight: '12px' }}>
+                    <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '2px' }}>{d.name}</div>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>
+                      {d.contact_name && `${d.contact_name}`}
+                      {d.order_method && ` · ${d.order_method}`}
+                    </div>
+                  </div>
+                  <button onClick={() => openForm(d)} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>Edit</button>
+                </div>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                  {d.email && <div style={{ fontSize: '12px', color: '#555' }}>✉ {d.email}</div>}
+                  {d.phone && <div style={{ fontSize: '12px', color: '#555' }}>📞 {d.phone}</div>}
+                  {d.minimum_order && <div style={{ fontSize: '12px', color: '#aaa' }}>Min: {d.minimum_order}</div>}
+                </div>
+                {d.notes && <div style={{ fontSize: '11px', color: '#aaa', marginTop: '6px' }}>{d.notes}</div>}
+              </div>
+            ))}
           </div>
         ) : (
           <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
