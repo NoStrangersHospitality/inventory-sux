@@ -3,18 +3,24 @@
 import { useEffect, useState, useRef } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
 export default function FOHInvoices() {
   const [loading, setLoading] = useState(true)
   const [invoices, setInvoices] = useState([])
   const [scanning, setScanning] = useState(false)
   const [scanResult, setScanResult] = useState(null)
-  const [confirming, setConfirming] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [approvingId, setApprovingId] = useState(null)
   const [inventoryItems, setInventoryItems] = useState([])
   const [view, setView] = useState('hub')
   const [isMobile, setIsMobile] = useState(false)
+  const [ownerIdResolved, setOwnerIdResolved] = useState(null)
   const fileRef = useRef()
   const router = useRouter()
+  const { ownerId } = useRole()
+  const initRan = useRef(false)
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -29,19 +35,25 @@ export default function FOHInvoices() {
   }, [])
 
   useEffect(() => {
+    if (!ownerId) return
+    if (initRan.current) return
+    initRan.current = true
+
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
-      await loadData(session.user.id)
+      const ownerIdToUse = ownerId || session.user.id
+      setOwnerIdResolved(ownerIdToUse)
+      await loadData(ownerIdToUse)
       setLoading(false)
     }
     init()
-  }, [])
+  }, [ownerId])
 
-  const loadData = async (userId) => {
+  const loadData = async (ownerIdToUse) => {
     const [{ data: invs }, { data: items }] = await Promise.all([
-      supabase.from('invoices').select('*').eq('user_id', userId).eq('area', 'foh').order('created_at', { ascending: false }).limit(20),
-      supabase.from('inventory_items').select('*').eq('user_id', userId).eq('area', 'foh').order('name')
+      supabase.from('invoices').select('*').eq('user_id', ownerIdToUse).eq('area', 'foh').order('created_at', { ascending: false }).limit(20),
+      supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'foh').order('name')
     ])
     setInvoices(invs || [])
     setInventoryItems(items || [])
@@ -54,18 +66,19 @@ export default function FOHInvoices() {
     setScanResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
+      const ownerIdToUse = ownerIdResolved || session.user.id
       const formData = new FormData()
       formData.append('file', file)
-      formData.append('userId', session.user.id)
+      formData.append('userId', ownerIdToUse)
       formData.append('area', 'foh')
       const res = await fetch('/api/scan-invoice', { method: 'POST', body: formData })
       const data = await res.json()
       if (data.error) { alert('Scan failed: ' + data.error); setScanning(false); return }
-      const fileName = `${session.user.id}/${Date.now()}_${file.name}`
+      const fileName = `${ownerIdToUse}/${Date.now()}_${file.name}`
       await supabase.storage.from('invoices').upload(fileName, file)
       const { data: invoice } = await supabase.from('invoices').insert({
-        user_id: session.user.id, vendor: data.vendor, invoice_number: data.invoice_number,
-        invoice_date: data.invoice_date, total_amount: data.total_amount, status: 'processed',
+        user_id: ownerIdToUse, vendor: data.vendor, invoice_number: data.invoice_number,
+        invoice_date: data.invoice_date, total_amount: data.total_amount, status: 'scanned',
         file_url: fileName, raw_text: JSON.stringify(data.line_items), area: 'foh'
       }).select().single()
       setScanResult({ ...data, invoice_id: invoice.id })
@@ -95,74 +108,117 @@ export default function FOHInvoices() {
     setScanResult(prev => ({ ...prev, line_items: prev.line_items.map((l, i) => i === idx ? { ...l, qty } : l) }))
   }
 
-  const confirmInvoice = async () => {
+  // Step 1: Save invoice lines to DB — no inventory writes yet
+  const saveInvoice = async () => {
     if (!scanResult) return
-    setConfirming(true)
+    setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-    const actionableLines = scanResult.line_items.filter(l => l.matched_item_id)
+    const ownerIdToUse = ownerIdResolved || session.user.id
 
-    for (const line of actionableLines) {
-      const isCreate = line.matched_item_id === '__create__'
-      let invItem = isCreate ? null : inventoryItems.find(i => i.id === line.matched_item_id)
+    // Save all line items to invoice_lines
+    const linesToSave = (scanResult.line_items || []).map(line => ({
+      invoice_id: scanResult.invoice_id,
+      user_id: ownerIdToUse,
+      raw_name: line.raw_name,
+      matched_item_id: line.matched_item_id === '__create__' ? null : (line.matched_item_id || null),
+      qty: parseFloat(line.qty) || 0,
+      unit_cost: parseFloat(line.unit_cost) || 0,
+      total_cost: parseFloat(line.total_cost) || 0,
+      match_confidence: line.match_confidence || 0,
+      match_status: line.match_status || 'unmatched',
+      new_category: line.new_category || null,
+      case_size: line.case_size || 1,
+      is_create_new: line.matched_item_id === '__create__',
+    }))
 
-      if (isCreate || !invItem) {
+    await supabase.from('invoice_lines').delete().eq('invoice_id', scanResult.invoice_id)
+    await supabase.from('invoice_lines').insert(linesToSave)
+    await supabase.from('invoices').update({ status: 'processed' }).eq('id', scanResult.invoice_id)
+
+    await loadData(ownerIdToUse)
+    setScanResult(null)
+    setSaving(false)
+    setView('hub')
+  }
+
+  // Step 2: Approve — read saved lines from DB and write to inventory
+  const approveInvoice = async (invoiceId) => {
+    setApproving(true)
+    setApprovingId(invoiceId)
+    const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerIdResolved || session.user.id
+
+    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).single()
+    const { data: lines } = await supabase.from('invoice_lines').select('*').eq('invoice_id', invoiceId)
+
+    if (!lines || lines.length === 0) {
+      alert('No saved lines found for this invoice.')
+      setApproving(false)
+      setApprovingId(null)
+      return
+    }
+
+    // Refresh inventory items to get latest on_hand
+    const { data: freshItems } = await supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'foh')
+    const itemsMap = {}
+    ;(freshItems || []).forEach(i => { itemsMap[i.id] = i })
+
+    for (const line of lines) {
+      if (line.is_create_new) {
+        // Create new inventory item
         const { data: newItem } = await supabase.from('inventory_items').insert({
-          user_id: session.user.id, name: line.raw_name, category: line.new_category || 'misc',
+          user_id: ownerIdToUse, name: line.raw_name, category: line.new_category || 'misc',
           item_type: 'unit', on_hand: (parseFloat(line.qty) || 0) * (line.case_size || 1),
           unit: line.unit || 'unit', unit_cost: parseFloat(line.unit_cost) || 0,
           par: 0, on_menu: false, area: 'foh',
-          last_invoice_date: scanResult.invoice_date || new Date().toISOString().split('T')[0]
+          last_invoice_date: invoice?.invoice_date || new Date().toISOString().split('T')[0]
         }).select().single()
         if (!newItem) continue
-        await supabase.from('invoice_lines').insert({
-          invoice_id: scanResult.invoice_id, user_id: session.user.id, raw_name: line.raw_name,
-          matched_item_id: newItem.id, qty: parseFloat(line.qty) || 0,
-          unit_cost: parseFloat(line.unit_cost) || 0, total_cost: parseFloat(line.total_cost) || 0,
-          match_confidence: 1, match_status: 'matched'
-        })
+        await supabase.from('invoice_lines').update({ matched_item_id: newItem.id, match_status: 'matched' }).eq('id', line.id)
         await supabase.from('inventory_history').insert({
-          user_id: session.user.id, inventory_item_id: newItem.id, item_name: newItem.name,
-          category: newItem.category, area: 'foh', event_type: 'invoice', event_id: scanResult.invoice_id,
+          user_id: ownerIdToUse, inventory_item_id: newItem.id, item_name: newItem.name,
+          category: newItem.category, area: 'foh', event_type: 'invoice', event_id: invoiceId,
           quantity_before: 0, quantity_change: (parseFloat(line.qty) || 0) * (line.case_size || 1),
           quantity_after: (parseFloat(line.qty) || 0) * (line.case_size || 1),
-          unit_cost_at_time: line.case_size > 1 ? (parseFloat(line.unit_cost) || 0) / (line.case_size || 1) : (parseFloat(line.unit_cost) || 0),
-          total_value_at_time: (parseFloat(line.qty) || 0) * (line.case_size || 1) * (line.case_size > 1 ? (parseFloat(line.unit_cost) || 0) / (line.case_size || 1) : (parseFloat(line.unit_cost) || 0))
+          unit_cost_at_time: parseFloat(line.unit_cost) || 0,
+          total_value_at_time: (parseFloat(line.qty) || 0) * (line.case_size || 1) * (parseFloat(line.unit_cost) || 0)
         })
-        await supabase.from('item_aliases').upsert({ user_id: session.user.id, raw_name: line.raw_name.toLowerCase(), inventory_item_id: newItem.id, source: 'auto' }, { onConflict: 'user_id,raw_name' })
-      } else {
-        const newOnHand = (parseFloat(invItem.on_hand) || 0) + (parseFloat(line.qty) || 0)
+        await supabase.from('item_aliases').upsert({ user_id: ownerIdToUse, raw_name: line.raw_name.toLowerCase(), inventory_item_id: newItem.id, source: 'auto' }, { onConflict: 'user_id,raw_name' })
+      } else if (line.matched_item_id) {
+        // Update existing inventory item
+        const invItem = itemsMap[line.matched_item_id]
+        if (!invItem) continue
+        const qtyChange = (parseFloat(line.qty) || 0) * (line.case_size || 1)
+        const newOnHand = (parseFloat(invItem.on_hand) || 0) + qtyChange
         const newUnitCost = line.unit_cost ? parseFloat(line.unit_cost) : invItem.unit_cost
-        await supabase.from('inventory_items').update({ on_hand: newOnHand, unit_cost: newUnitCost, last_invoice_date: scanResult.invoice_date || new Date().toISOString().split('T')[0] }).eq('id', invItem.id)
-        await supabase.from('invoice_lines').insert({
-          invoice_id: scanResult.invoice_id, user_id: session.user.id, raw_name: line.raw_name,
-          matched_item_id: invItem.id, qty: parseFloat(line.qty) || 0,
-          unit_cost: parseFloat(line.unit_cost) || 0, total_cost: parseFloat(line.total_cost) || 0,
-          match_confidence: line.match_confidence || 0, match_status: 'matched'
-        })
+        await supabase.from('inventory_items').update({
+          on_hand: newOnHand, unit_cost: newUnitCost,
+          last_invoice_date: invoice?.invoice_date || new Date().toISOString().split('T')[0]
+        }).eq('id', invItem.id)
         await supabase.from('inventory_history').insert({
-          user_id: session.user.id, inventory_item_id: invItem.id, item_name: invItem.name,
-          category: invItem.category, area: 'foh', event_type: 'invoice', event_id: scanResult.invoice_id,
-          quantity_before: parseFloat(invItem.on_hand) || 0, quantity_change: parseFloat(line.qty) || 0,
+          user_id: ownerIdToUse, inventory_item_id: invItem.id, item_name: invItem.name,
+          category: invItem.category, area: 'foh', event_type: 'invoice', event_id: invoiceId,
+          quantity_before: parseFloat(invItem.on_hand) || 0, quantity_change: qtyChange,
           quantity_after: newOnHand, unit_cost_at_time: newUnitCost, total_value_at_time: newOnHand * newUnitCost
         })
         if (line.raw_name) {
-          await supabase.from('item_aliases').upsert({ user_id: session.user.id, raw_name: line.raw_name.toLowerCase(), inventory_item_id: invItem.id, source: 'manual' }, { onConflict: 'user_id,raw_name' })
+          await supabase.from('item_aliases').upsert({ user_id: ownerIdToUse, raw_name: line.raw_name.toLowerCase(), inventory_item_id: invItem.id, source: 'manual' }, { onConflict: 'user_id,raw_name' })
         }
       }
     }
 
-    await supabase.from('invoices').update({ status: 'confirmed' }).eq('id', scanResult.invoice_id)
-    await loadData(session.user.id)
-    setScanResult(null)
-    setConfirming(false)
-    setView('hub')
+    await supabase.from('invoices').update({ status: 'confirmed' }).eq('id', invoiceId)
+    await loadData(ownerIdToUse)
+    setApproving(false)
+    setApprovingId(null)
   }
 
   const fmt = (n) => '$' + Number(n || 0).toFixed(2)
 
   const statusColor = (s) => {
     if (s === 'confirmed') return { bg: '#EAF3DE', color: '#27500A', border: '#97C459' }
-    if (s === 'processed') return { bg: '#E6F1FB', color: '#0C447C', border: '#85B7EB' }
+    if (s === 'processed') return { bg: '#FAEEDA', color: '#854F0B', border: '#f0c080' }
+    if (s === 'scanned') return { bg: '#E6F1FB', color: '#0C447C', border: '#85B7EB' }
     return { bg: '#f5f5f3', color: '#aaa', border: '#e8e8e8' }
   }
 
@@ -200,7 +256,7 @@ export default function FOHInvoices() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', gap: '12px' }}>
               <div>
                 <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Invoice Scanning</h1>
-                {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Scan a delivery invoice to automatically update on hand quantities.</p>}
+                {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Scan a delivery invoice, review the lines, then approve to update on hand quantities.</p>}
               </div>
               <label style={{ background: '#333', color: '#fff', border: 'none', padding: isMobile ? '8px 12px' : '10px 20px', borderRadius: '8px', fontSize: isMobile ? '12px' : '13px', fontWeight: '600', cursor: scanning ? 'not-allowed' : 'pointer', display: 'inline-block', opacity: scanning ? 0.7 : 1, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {scanning ? '⏳ Scanning...' : '📄 Scan Invoice'}
@@ -215,8 +271,8 @@ export default function FOHInvoices() {
                 {[
                   { step: '1', label: 'Upload', desc: 'Photo or PDF of your delivery invoice' },
                   { step: '2', label: 'Scan', desc: 'Claude reads every line item automatically' },
-                  { step: '3', label: 'Match', desc: 'Items matched to your inventory database' },
-                  { step: '4', label: 'Confirm', desc: 'On hand quantities update instantly' },
+                  { step: '3', label: 'Review', desc: 'Match items and save — no inventory changes yet' },
+                  { step: '4', label: 'Approve', desc: 'Hit Approve to update on hand quantities' },
                 ].map(s => (
                   <div key={s.step} style={{ textAlign: 'center' }}>
                     <div style={{ width: '28px', height: '28px', background: '#185FA5', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: '700', margin: '0 auto 6px' }}>{s.step}</div>
@@ -239,12 +295,11 @@ export default function FOHInvoices() {
                   const sc = statusColor(inv.status)
                   return (
                     <div key={inv.id} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '14px 16px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                         <div style={{ flex: 1, marginRight: '12px' }}>
                           <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '2px' }}>{inv.vendor || '--'}</div>
                           <div style={{ fontSize: '12px', color: '#aaa' }}>
-                            {inv.invoice_date || '--'}
-                            {inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
+                            {inv.invoice_date || '--'}{inv.invoice_number ? ` · #${inv.invoice_number}` : ''}
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '6px' }}>
@@ -252,16 +307,23 @@ export default function FOHInvoices() {
                           {inv.total_amount && <div style={{ fontSize: '14px', fontWeight: '600', color: '#000' }}>{fmt(inv.total_amount)}</div>}
                         </div>
                       </div>
-                      {inv.file_url && (
-                        <button onClick={async () => {
-                          const filePath = inv.file_url.startsWith('http') ? inv.file_url.split('/invoices/')[1]?.split('?')[0] : inv.file_url
-                          const { data } = await supabase.storage.from('invoices').createSignedUrl(filePath, 3600)
-                          if (data?.signedUrl) window.open(data.signedUrl, '_blank')
-                          else alert('Could not generate view URL.')
-                        }} style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', marginTop: '4px' }}>
-                          View File
-                        </button>
-                      )}
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
+                        {inv.file_url && (
+                          <button onClick={async () => {
+                            const filePath = inv.file_url.startsWith('http') ? inv.file_url.split('/invoices/')[1]?.split('?')[0] : inv.file_url
+                            const { data } = await supabase.storage.from('invoices').createSignedUrl(filePath, 3600)
+                            if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                          }} style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '5px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+                            View File
+                          </button>
+                        )}
+                        {inv.status === 'processed' && (
+                          <button onClick={() => approveInvoice(inv.id)} disabled={approving && approvingId === inv.id}
+                            style={{ flex: 1, background: approving && approvingId === inv.id ? '#ccc' : '#3B6D11', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' }}>
+                            {approving && approvingId === inv.id ? 'Approving...' : '✓ Approve'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )
                 })}
@@ -287,16 +349,23 @@ export default function FOHInvoices() {
                             <span style={{ background: sc.bg, color: sc.color, border: `1px solid ${sc.border}`, borderRadius: '10px', fontSize: '11px', padding: '2px 8px', fontWeight: '500' }}>{inv.status}</span>
                           </td>
                           <td style={{ padding: '12px 14px', textAlign: 'right' }}>
-                            {inv.file_url && (
-                              <button onClick={async () => {
-                                const filePath = inv.file_url.startsWith('http') ? inv.file_url.split('/invoices/')[1]?.split('?')[0] : inv.file_url
-                                const { data } = await supabase.storage.from('invoices').createSignedUrl(filePath, 3600)
-                                if (data?.signedUrl) window.open(data.signedUrl, '_blank')
-                                else alert('Could not generate view URL.')
-                              }} style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
-                                View
-                              </button>
-                            )}
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                              {inv.file_url && (
+                                <button onClick={async () => {
+                                  const filePath = inv.file_url.startsWith('http') ? inv.file_url.split('/invoices/')[1]?.split('?')[0] : inv.file_url
+                                  const { data } = await supabase.storage.from('invoices').createSignedUrl(filePath, 3600)
+                                  if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                                }} style={{ background: 'none', border: '1px solid #e8e8e8', color: '#aaa', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>
+                                  View
+                                </button>
+                              )}
+                              {inv.status === 'processed' && (
+                                <button onClick={() => approveInvoice(inv.id)} disabled={approving && approvingId === inv.id}
+                                  style={{ background: approving && approvingId === inv.id ? '#ccc' : '#3B6D11', color: '#fff', border: 'none', padding: '4px 12px', borderRadius: '6px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' }}>
+                                  {approving && approvingId === inv.id ? 'Approving...' : '✓ Approve'}
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       )
@@ -323,12 +392,17 @@ export default function FOHInvoices() {
               {!isMobile && (
                 <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
                   <button onClick={() => { setScanResult(null); setView('hub') }} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 14px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
-                  <button onClick={confirmInvoice} disabled={confirming}
-                    style={{ background: confirming ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '9px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: confirming ? 'not-allowed' : 'pointer' }}>
-                    {confirming ? 'Confirming...' : '✓ Confirm & Update'}
+                  <button onClick={saveInvoice} disabled={saving}
+                    style={{ background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '9px 20px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                    {saving ? 'Saving...' : '💾 Save for Approval'}
                   </button>
                 </div>
               )}
+            </div>
+
+            {/* Info banner */}
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', fontSize: '12px', color: '#a07800' }}>
+              💡 Review and match items below, then hit <strong>Save for Approval</strong>. Inventory won't update until you hit <strong>Approve</strong> on the hub.
             </div>
 
             {/* Summary stats */}
@@ -346,12 +420,7 @@ export default function FOHInvoices() {
               ))}
             </div>
 
-            {/* Info */}
-            <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', fontSize: '12px', color: '#185FA5' }}>
-              💡 Use the dropdown to match each line item to your inventory. Select <strong>+ Create new item</strong> to add items that don't exist yet.
-            </div>
-
-            {/* Line items — cards on mobile, table on desktop */}
+            {/* Line items */}
             {isMobile ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {(scanResult.line_items || []).map((line, idx) => (
@@ -474,19 +543,19 @@ export default function FOHInvoices() {
               </div>
             )}
 
-            {/* Mobile confirm button */}
+            {/* Mobile save button */}
             {isMobile && (
               <div style={{ position: 'sticky', bottom: '16px', marginTop: '16px', display: 'flex', gap: '8px' }}>
                 <button onClick={() => { setScanResult(null); setView('hub') }} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-                <button onClick={confirmInvoice} disabled={confirming}
-                  style={{ flex: 2, background: confirming ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: confirming ? 'not-allowed' : 'pointer' }}>
-                  {confirming ? 'Confirming...' : '✓ Confirm & Update'}
+                <button onClick={saveInvoice} disabled={saving}
+                  style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                  {saving ? 'Saving...' : '💾 Save for Approval'}
                 </button>
               </div>
             )}
 
             <div style={{ marginTop: '12px', fontSize: '12px', color: '#aaa' }}>
-              Matched and new items will update inventory on confirmation. Unmatched items are saved to the invoice record only.
+              Saving does not update inventory. Return to the hub and hit Approve when you're ready to apply the changes.
             </div>
           </>
         )}
