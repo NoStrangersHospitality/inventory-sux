@@ -144,7 +144,10 @@ const ownerIdToUse = ownerId || session.user.id
     }))
 
     await supabase.from('invoice_lines').delete().eq('invoice_id', scanResult.invoice_id)
-    await supabase.from('invoice_lines').insert(linesToSave)
+const { data: savedLines, error: linesError } = await supabase.from('invoice_lines').insert(linesToSave).select()
+console.log('Lines to save:', linesToSave)
+console.log('Saved lines:', savedLines)
+console.log('Lines error:', linesError)
     await supabase.from('invoices').update({ status: 'processed' }).eq('id', scanResult.invoice_id)
 
     await loadData(ownerIdToUse)
