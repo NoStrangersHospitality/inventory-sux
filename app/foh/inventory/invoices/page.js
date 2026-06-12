@@ -66,7 +66,7 @@ export default function FOHInvoices() {
     setScanResult(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
-const ownerIdToUse = ownerId || session.user.id
+      const ownerIdToUse = ownerIdResolved || session.user.id
       const formData = new FormData()
       formData.append('file', file)
       formData.append('userId', ownerIdToUse)
@@ -113,13 +113,14 @@ const ownerIdToUse = ownerId || session.user.id
     if (!scanResult) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
-const ownerIdToUse = ownerId || session.user.id
+    const ownerIdToUse = ownerIdResolved || session.user.id
 
     // Save all line items to invoice_lines
     const linesToSave = (scanResult.line_items || []).map(line => ({
       invoice_id: scanResult.invoice_id,
       user_id: ownerIdToUse,
       raw_name: line.raw_name,
+      item_number: line.item_number || null,
       matched_item_id: line.matched_item_id === '__create__' ? null : (line.matched_item_id || null),
       qty: parseFloat(line.qty) || 0,
       unit_cost: parseFloat(line.unit_cost) || 0,
@@ -146,7 +147,7 @@ const ownerIdToUse = ownerId || session.user.id
     setApproving(true)
     setApprovingId(invoiceId)
     const { data: { session } } = await supabase.auth.getSession()
-const ownerIdToUse = ownerId || session.user.id
+    const ownerIdToUse = ownerIdResolved || session.user.id
 
     const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).single()
     const { data: lines } = await supabase.from('invoice_lines').select('*').eq('invoice_id', invoiceId)
@@ -170,6 +171,7 @@ const ownerIdToUse = ownerId || session.user.id
           user_id: ownerIdToUse, name: line.raw_name, category: line.new_category || 'misc',
           item_type: 'unit', on_hand: (parseFloat(line.qty) || 0) * (line.case_size || 1),
           unit: line.unit || 'unit', unit_cost: parseFloat(line.unit_cost) || 0,
+          item_number: line.item_number || null,
           par: 0, on_menu: false, area: 'foh',
           last_invoice_date: invoice?.invoice_date || new Date().toISOString().split('T')[0]
         }).select().single()
