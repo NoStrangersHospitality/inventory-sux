@@ -25,14 +25,19 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     setError('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) {
-      setError(error.message)
-      setLoading(false)
-    } else {
-      router.push('/dashboard')
-      router.refresh()
-    }
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
+if (error) {
+  setError(error.message)
+  setLoading(false)
+} else {
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('is_admin')
+    .eq('id', data.user.id)
+    .single()
+  router.push(profile?.is_admin ? '/admin' : '/dashboard')
+  router.refresh()
+}
   }
 
   const handleReset = async (e) => {
