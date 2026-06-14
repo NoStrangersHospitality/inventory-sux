@@ -26,16 +26,6 @@ export default function ReceiveOrder() {
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) { router.push('/auth/login'); return }
-      await loadOrder(session.user.id)
-      setLoading(false)
-    }
-    init()
-  }, [params.orderId])
-
   const loadOrder = async (userId) => {
     const [{ data: orderData }, { data: lineData }, { data: receivingData }] = await Promise.all([
       supabase.from('orders').select('*').eq('id', params.orderId).eq('user_id', userId).single(),
@@ -69,12 +59,25 @@ export default function ReceiveOrder() {
           status: 'pending'
         }
       })
-      const { data: inserted } = await supabase.from('order_receiving').insert(toInsert).select()
-      ;(inserted || []).forEach(r => { recMap[r.distributor_name] = r })
+      if (toInsert.length > 0) {
+        const { data: inserted } = await supabase.from('order_receiving').insert(toInsert).select()
+        ;(inserted || []).forEach(r => { recMap[r.distributor_name] = r })
+      }
     }
 
     setReceiving(recMap)
   }
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth/login'); return }
+      await loadOrder(session.user.id)
+      setLoading(false)
+    }
+    init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.orderId])
 
   const toggleLine = (id) => {
     setLines(prev => prev.map(l => l.id === id ? { ...l, received: !l.received, received_qty: !l.received ? l.final_qty : 0 } : l))
@@ -87,7 +90,6 @@ export default function ReceiveOrder() {
   const confirmDistributor = async (distName, status) => {
     if (status === 'rejected' && !confirm(`Reject the entire delivery from ${distName}?`)) return
     setSubmitting(distName)
-    const { data: { session } } = await supabase.auth.getSession()
 
     const distLines = lines.filter(l => (l.distributor_name || 'Unassigned') === distName)
     const resolvedLines = status === 'received'
@@ -172,6 +174,23 @@ export default function ReceiveOrder() {
     </div>
   )
 
+  // Defensive guard: some legacy orders ended up with 0 order_lines due to a
+  // resolved bug in the order page (resuming a 'ready' order whose items had
+  // all dropped to suggested=0 would land on an empty recap, and hitting
+  // Mark as Ready / Submit from there wiped the order_lines). For any order
+  // that still has no lines, show a clear message instead of a misleading
+  // "0/0 distributors confirmed — all confirmed" state.
+  if (lines.length === 0) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', padding: '20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '40px 32px', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
+        <div style={{ fontSize: '40px', marginBottom: '12px' }}>⚠️</div>
+        <h2 style={{ fontSize: '18px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>No items on this order</h2>
+        <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '24px' }}>This order has no line items to confirm — it may have been corrupted by a past bug.</p>
+        <button onClick={() => router.push('/foh/ordering')} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>← Back to Ordering</button>
+      </div>
+    </div>
+  )
+
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
@@ -198,7 +217,7 @@ export default function ReceiveOrder() {
         </div>
 
         <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#185FA5' }}>
-          💡 Confirm each distributor's delivery separately. Inventory updates when you scan the invoice — this just tracks what arrived.
+          💡 Confirm each distributor&apos;s delivery separately. Inventory updates when you scan the invoice — this just tracks what arrived.
         </div>
 
         {/* Distributor sections */}
@@ -207,10 +226,6 @@ export default function ReceiveOrder() {
           const isConfirmed = rec && rec.status !== 'pending'
           const isSubmitting = submitting === distName
           const badge = rec ? statusBadge(rec.status) : null
-
-          const receivedCount = distLines.filter(l => l.received).length
-          const missingCount = distLines.filter(l => !l.received).length
-          const shortCount = distLines.filter(l => l.received && parseFloat(l.received_qty) < parseFloat(l.final_qty)).length
 
           return (
             <div key={distName} style={{ marginBottom: '20px', opacity: isConfirmed ? 0.85 : 1 }}>
@@ -299,7 +314,7 @@ export default function ReceiveOrder() {
               {!isConfirmed && (
                 <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', padding: isMobile ? '14px' : '16px 20px' }}>
                   <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '10px', textAlign: 'center' }}>
-                    How did {distName}'s delivery go?
+                    How did {distName}&apos;s delivery go?
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: isMobile ? '8px' : '12px' }}>
                     <button onClick={() => confirmDistributor(distName, 'rejected')} disabled={!!isSubmitting}
@@ -317,7 +332,7 @@ export default function ReceiveOrder() {
                   </div>
                   {!isMobile && (
                     <div style={{ fontSize: '11px', color: '#aaa', textAlign: 'center', marginTop: '8px' }}>
-                      🟢 all items received at ordered quantities · 🟡 confirms what you've checked above · 🔴 rejects this delivery
+                      🟢 all items received at ordered quantities · 🟡 confirms what you&apos;ve checked above · 🔴 rejects this delivery
                     </div>
                   )}
                 </div>
