@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
@@ -112,7 +112,7 @@ export default function COGS() {
   const [recipeForm, setRecipeForm] = useState({ name: '', menu_price: '', target_cost_pct: '0.20' })
   const [recipeIngs, setRecipeIngs] = useState([{ spirit_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
   const [prepIngForm, setPrepIngForm] = useState({ name: '', unit: '', cost_per_unit: '' })
-  const [prepItemForm, setPrepItemForm] = useState({ name: '', category: '', yield_amount: '', yield_unit: 'oz', notes: '' })
+  const [prepItemForm, setPrepItemForm] = useState({ name: '', category: '', yield_amount: '', yield_unit: 'oz', notes: '', source_type: 'made', purchase_cost: '' })
   const [prepItemIngs, setPrepItemIngs] = useState([{ source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])
   const router = useRouter()
 
@@ -167,6 +167,7 @@ export default function COGS() {
   }
 
   const getPrepItemCost = (prepItem) => {
+    if (prepItem.source_type === 'purchased') return parseFloat(prepItem.purchase_cost) || 0
     const ings = prepItemIngredients.filter(pii => pii.prep_item_id === prepItem.id)
     return ings.reduce((total, ing) => {
       if (ing.source_type === 'prep_ingredient') {
@@ -220,6 +221,11 @@ export default function COGS() {
     }
     return total
   }, 0)
+
+  // Live cost for the form preview — handles both recipe-built and purchased items
+  const currentLiveCost = () => prepItemForm.source_type === 'purchased'
+    ? (parseFloat(prepItemForm.purchase_cost) || 0)
+    : livePrepCost()
 
   const saveSpiritForm = async () => {
     if (!spiritForm.name || !spiritForm.bottle_size_oz || !spiritForm.bottle_cost) return
@@ -324,31 +330,51 @@ export default function COGS() {
 
   const savePrepItemForm = async () => {
     if (!prepItemForm.name || !prepItemForm.yield_amount) return
+    if (prepItemForm.source_type === 'purchased' && !prepItemForm.purchase_cost) return
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     let prepItemId = editingPrepItemId
+    const basePayload = {
+      name: prepItemForm.name,
+      category: prepItemForm.category,
+      yield_amount: parseFloat(prepItemForm.yield_amount),
+      yield_unit: prepItemForm.yield_unit,
+      notes: prepItemForm.notes,
+      source_type: prepItemForm.source_type,
+      purchase_cost: prepItemForm.source_type === 'purchased' ? (parseFloat(prepItemForm.purchase_cost) || 0) : null,
+    }
     if (editingPrepItemId) {
-      await supabase.from('prep_items').update({ name: prepItemForm.name, category: prepItemForm.category, yield_amount: parseFloat(prepItemForm.yield_amount), yield_unit: prepItemForm.yield_unit, notes: prepItemForm.notes }).eq('id', editingPrepItemId)
+      await supabase.from('prep_items').update(basePayload).eq('id', editingPrepItemId)
       await supabase.from('prep_item_ingredients').delete().eq('prep_item_id', editingPrepItemId)
     } else {
-      const { data } = await supabase.from('prep_items').insert({ name: prepItemForm.name, category: prepItemForm.category, yield_amount: parseFloat(prepItemForm.yield_amount), yield_unit: prepItemForm.yield_unit, notes: prepItemForm.notes, user_id: session.user.id }).select().single()
+      const { data } = await supabase.from('prep_items').insert({ ...basePayload, user_id: session.user.id }).select().single()
       prepItemId = data.id
     }
-    const validIngs = prepItemIngs.filter(i => i.source_id && i.quantity)
-    if (validIngs.length > 0) {
-      await supabase.from('prep_item_ingredients').insert(validIngs.map(i => ({ prep_item_id: prepItemId, user_id: session.user.id, source_type: i.source_type, source_id: i.source_id, quantity: parseFloat(i.quantity), unit: i.unit })))
+    if (prepItemForm.source_type === 'made') {
+      const validIngs = prepItemIngs.filter(i => i.source_id && i.quantity)
+      if (validIngs.length > 0) {
+        await supabase.from('prep_item_ingredients').insert(validIngs.map(i => ({ prep_item_id: prepItemId, user_id: session.user.id, source_type: i.source_type, source_id: i.source_id, quantity: parseFloat(i.quantity), unit: i.unit })))
+      }
     }
     await loadData(session.user.id); setShowPrepItemForm(false); setSaving(false)
   }
 
   const openPrepItemForm = (item = null) => {
     if (item) {
-      setPrepItemForm({ name: item.name, category: item.category || '', yield_amount: item.yield_amount, yield_unit: item.yield_unit || 'oz', notes: item.notes || '' })
+      setPrepItemForm({
+        name: item.name,
+        category: item.category || '',
+        yield_amount: item.yield_amount,
+        yield_unit: item.yield_unit || 'oz',
+        notes: item.notes || '',
+        source_type: item.source_type || 'made',
+        purchase_cost: item.purchase_cost != null ? item.purchase_cost : '',
+      })
       setEditingPrepItemId(item.id)
       const ings = prepItemIngredients.filter(pii => pii.prep_item_id === item.id)
       setPrepItemIngs(ings.length ? ings.map(i => ({ source_type: i.source_type, source_id: i.source_id, quantity: i.quantity, unit: i.unit })) : [{ source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])
     } else {
-      setPrepItemForm({ name: '', category: '', yield_amount: '', yield_unit: 'oz', notes: '' }); setEditingPrepItemId(null)
+      setPrepItemForm({ name: '', category: '', yield_amount: '', yield_unit: 'oz', notes: '', source_type: 'made', purchase_cost: '' }); setEditingPrepItemId(null)
       setPrepItemIngs([{ source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])
     }
     setShowPrepItemForm(true)
@@ -665,38 +691,61 @@ export default function COGS() {
                 {showPrepItemForm && (
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
                     <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '14px' }}>{editingPrepItemId ? 'Edit Prep Item' : 'Add Prep Item'}</h3>
+
+                    {/* Source type toggle */}
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '14px' }}>
+                      {[
+                        { key: 'made', label: '🧪 Recipe (built from ingredients)' },
+                        { key: 'purchased', label: '🧾 Purchased (enter cost directly)' },
+                      ].map(opt => (
+                        <button key={opt.key} onClick={() => setPrepItemForm(f => ({ ...f, source_type: opt.key }))}
+                          style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid', borderColor: prepItemForm.source_type === opt.key ? '#F5B800' : '#e8e8e8', background: prepItemForm.source_type === opt.key ? '#fffbe6' : '#fff', color: prepItemForm.source_type === opt.key ? '#a07800' : '#888', fontSize: '12px', fontWeight: '600', cursor: 'pointer', textAlign: 'center' }}>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+
                     <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
-                      <div style={{ gridColumn: '1/-1' }}><label style={labelStyle}>Prep Item Name</label><input style={inputStyle} placeholder="Demerara Syrup 2:1" value={prepItemForm.name} onChange={e => setPrepItemForm(f => ({ ...f, name: e.target.value }))} /></div>
+                      <div style={{ gridColumn: '1/-1' }}><label style={labelStyle}>{prepItemForm.source_type === 'purchased' ? 'Item Name' : 'Prep Item Name'}</label><input style={inputStyle} placeholder={prepItemForm.source_type === 'purchased' ? 'Liquid Alchemist Orgeat' : 'Demerara Syrup 2:1'} value={prepItemForm.name} onChange={e => setPrepItemForm(f => ({ ...f, name: e.target.value }))} /></div>
                       <div><label style={labelStyle}>Category</label><select style={inputStyle} value={prepItemForm.category} onChange={e => setPrepItemForm(f => ({ ...f, category: e.target.value }))}><option value="">-- Select --</option>{PREP_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                        <div><label style={labelStyle}>Yield Amount</label><input style={inputStyle} type="number" step="0.01" placeholder="32" value={prepItemForm.yield_amount} onChange={e => setPrepItemForm(f => ({ ...f, yield_amount: e.target.value }))} /></div>
-                        <div><label style={labelStyle}>Yield Unit</label><select style={inputStyle} value={prepItemForm.yield_unit} onChange={e => setPrepItemForm(f => ({ ...f, yield_unit: e.target.value }))}>{YIELD_UNITS.map(u => <option key={u}>{u}</option>)}</select></div>
+                        <div><label style={labelStyle}>{prepItemForm.source_type === 'purchased' ? 'Size' : 'Yield Amount'}</label><input style={inputStyle} type="number" step="0.01" placeholder={prepItemForm.source_type === 'purchased' ? '25.36' : '32'} value={prepItemForm.yield_amount} onChange={e => setPrepItemForm(f => ({ ...f, yield_amount: e.target.value }))} /></div>
+                        <div><label style={labelStyle}>{prepItemForm.source_type === 'purchased' ? 'Size Unit' : 'Yield Unit'}</label><select style={inputStyle} value={prepItemForm.yield_unit} onChange={e => setPrepItemForm(f => ({ ...f, yield_unit: e.target.value }))}>{YIELD_UNITS.map(u => <option key={u}>{u}</option>)}</select></div>
                       </div>
-                      <div style={{ gridColumn: '1/-1' }}><label style={labelStyle}>Notes</label><input style={inputStyle} placeholder="Store refrigerated for up to 2 weeks" value={prepItemForm.notes} onChange={e => setPrepItemForm(f => ({ ...f, notes: e.target.value }))} /></div>
+                      {prepItemForm.source_type === 'purchased' && (
+                        <div><label style={labelStyle}>Total Cost ($)</label><input style={inputStyle} type="number" step="0.01" placeholder="20.75" value={prepItemForm.purchase_cost} onChange={e => setPrepItemForm(f => ({ ...f, purchase_cost: e.target.value }))} /></div>
+                      )}
+                      <div style={{ gridColumn: '1/-1' }}><label style={labelStyle}>Notes</label><input style={inputStyle} placeholder={prepItemForm.source_type === 'purchased' ? 'Distributor, case size, etc.' : 'Store refrigerated for up to 2 weeks'} value={prepItemForm.notes} onChange={e => setPrepItemForm(f => ({ ...f, notes: e.target.value }))} /></div>
                     </div>
-                    <div style={{ fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '8px' }}>Ingredients</div>
-                    {prepItemIngs.map((ing, i) => (
-                      <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 60px 28px' : '1fr 2fr 1fr 1fr auto', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
-                        <select style={inputStyle} value={ing.source_type} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, source_type: e.target.value, source_id: '' } : r))}>
-                          <option value="prep_ingredient">Prep Ing</option>
-                          <option value="spirit">Spirit</option>
-                          <option value="prep_item">Prep Item</option>
-                        </select>
-                        <select style={inputStyle} value={ing.source_id} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, source_id: e.target.value } : r))}>
-                          <option value="">-- Select --</option>
-                          {ing.source_type === 'prep_ingredient' && prepIngredients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                          {ing.source_type === 'spirit' && spirits.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                          {ing.source_type === 'prep_item' && prepItems.filter(p => p.id !== editingPrepItemId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                        <input style={inputStyle} type="number" step="0.01" placeholder="qty" value={ing.quantity} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, quantity: e.target.value } : r))} />
-                        <select style={inputStyle} value={ing.unit} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, unit: e.target.value } : r))}>{PREP_UNITS.map(u => <option key={u}>{u}</option>)}</select>
-                        <button onClick={() => setPrepItemIngs(pi => pi.length > 1 ? pi.filter((_, j) => j !== i) : pi)} style={{ background: '#333', border: 'none', color: '#fff', width: '28px', height: '36px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}>×</button>
-                      </div>
-                    ))}
-                    <button onClick={() => setPrepItemIngs(pi => [...pi, { source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])} style={{ width: '100%', border: '1px dashed #e0e0e0', background: 'none', color: '#aaa', padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '14px' }}>+ Add Ingredient</button>
-                    {livePrepCost() > 0 && prepItemForm.yield_amount > 0 && (
+
+                    {prepItemForm.source_type === 'made' && (
+                      <>
+                        <div style={{ fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '8px' }}>Ingredients</div>
+                        {prepItemIngs.map((ing, i) => (
+                          <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 60px 28px' : '1fr 2fr 1fr 1fr auto', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+                            <select style={inputStyle} value={ing.source_type} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, source_type: e.target.value, source_id: '' } : r))}>
+                              <option value="prep_ingredient">Prep Ing</option>
+                              <option value="spirit">Spirit</option>
+                              <option value="prep_item">Prep Item</option>
+                            </select>
+                            <select style={inputStyle} value={ing.source_id} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, source_id: e.target.value } : r))}>
+                              <option value="">-- Select --</option>
+                              {ing.source_type === 'prep_ingredient' && prepIngredients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                              {ing.source_type === 'spirit' && spirits.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                              {ing.source_type === 'prep_item' && prepItems.filter(p => p.id !== editingPrepItemId).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                            </select>
+                            <input style={inputStyle} type="number" step="0.01" placeholder="qty" value={ing.quantity} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, quantity: e.target.value } : r))} />
+                            <select style={inputStyle} value={ing.unit} onChange={e => setPrepItemIngs(pi => pi.map((r, j) => j === i ? { ...r, unit: e.target.value } : r))}>{PREP_UNITS.map(u => <option key={u}>{u}</option>)}</select>
+                            <button onClick={() => setPrepItemIngs(pi => pi.length > 1 ? pi.filter((_, j) => j !== i) : pi)} style={{ background: '#333', border: 'none', color: '#fff', width: '28px', height: '36px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}>×</button>
+                          </div>
+                        ))}
+                        <button onClick={() => setPrepItemIngs(pi => [...pi, { source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])} style={{ width: '100%', border: '1px dashed #e0e0e0', background: 'none', color: '#aaa', padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '14px' }}>+ Add Ingredient</button>
+                      </>
+                    )}
+
+                    {currentLiveCost() > 0 && prepItemForm.yield_amount > 0 && (
                       <div style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px', marginBottom: '14px', display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '10px', textAlign: 'center' }}>
-                        {[{ label: 'Batch Cost', val: fmt(livePrepCost()) }, { label: `Per ${prepItemForm.yield_unit || 'oz'}`, val: fmt(livePrepCost() / parseFloat(prepItemForm.yield_amount)) }, { label: 'Yield', val: prepItemForm.yield_amount + ' ' + (prepItemForm.yield_unit || 'oz') }].map(p => <div key={p.label}><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '3px' }}>{p.label}</div><div style={{ fontSize: isMobile ? '15px' : '18px', fontWeight: '700', color: '#000' }}>{p.val}</div></div>)}
+                        {[{ label: prepItemForm.source_type === 'purchased' ? 'Total Cost' : 'Batch Cost', val: fmt(currentLiveCost()) }, { label: `Per ${prepItemForm.yield_unit || 'oz'}`, val: fmt(currentLiveCost() / parseFloat(prepItemForm.yield_amount)) }, { label: prepItemForm.source_type === 'purchased' ? 'Size' : 'Yield', val: prepItemForm.yield_amount + ' ' + (prepItemForm.yield_unit || 'oz') }].map(p => <div key={p.label}><div style={{ fontSize: '11px', color: '#aaa', marginBottom: '3px' }}>{p.label}</div><div style={{ fontSize: isMobile ? '15px' : '18px', fontWeight: '700', color: '#000' }}>{p.val}</div></div>)}
                       </div>
                     )}
                     <div style={{ display: 'flex', gap: '10px' }}>
@@ -713,20 +762,26 @@ export default function COGS() {
                       const cost = getPrepItemCost(item)
                       const costPerUnit = item.yield_amount > 0 ? cost / item.yield_amount : 0
                       const ings = prepItemIngredients.filter(pii => pii.prep_item_id === item.id)
+                      const isPurchased = item.source_type === 'purchased'
                       return (
                         <div key={item.id} onClick={() => openPrepItemForm(item)} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '14px', overflow: 'hidden', cursor: 'pointer', transition: 'border-color .15s' }} onMouseEnter={e => e.currentTarget.style.borderColor = '#F5B800'} onMouseLeave={e => e.currentTarget.style.borderColor = '#e8e8e8'}>
                           <div style={{ background: '#111', padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff' }}>{item.name}</div>
-                            {item.category && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '10px', background: '#F5B800', color: '#000', fontWeight: '600' }}>{item.category}</span>}
+                            <div style={{ display: 'flex', gap: '6px' }}>
+                              {isPurchased && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '10px', background: '#444', color: '#fff' }}>🧾 Purchased</span>}
+                              {item.category && <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '10px', background: '#F5B800', color: '#000', fontWeight: '600' }}>{item.category}</span>}
+                            </div>
                           </div>
                           <div style={{ padding: '14px 16px' }}>
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-                              {[{ label: 'Batch Cost', val: fmt(cost) }, { label: `Per ${item.yield_unit || 'oz'}`, val: fmt(costPerUnit) }, { label: 'Yield', val: item.yield_amount + ' ' + (item.yield_unit || 'oz') }].map(m => <div key={m.label} style={{ background: '#f5f5f3', borderRadius: '8px', padding: '8px 10px' }}><div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px' }}>{m.label}</div><div style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{m.val}</div></div>)}
+                              {[{ label: isPurchased ? 'Total Cost' : 'Batch Cost', val: fmt(cost) }, { label: `Per ${item.yield_unit || 'oz'}`, val: fmt(costPerUnit) }, { label: isPurchased ? 'Size' : 'Yield', val: item.yield_amount + ' ' + (item.yield_unit || 'oz') }].map(m => <div key={m.label} style={{ background: '#f5f5f3', borderRadius: '8px', padding: '8px 10px' }}><div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px' }}>{m.label}</div><div style={{ fontSize: '13px', fontWeight: '700', color: '#000' }}>{m.val}</div></div>)}
                             </div>
-                            <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '10px' }}>
-                              {ings.slice(0, 4).map(ing => <div key={ing.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0', borderBottom: '1px solid #f9f9f9' }}><span style={{ color: '#555' }}>{getIngredientName(ing)}</span><span style={{ color: '#aaa' }}>{ing.quantity} {ing.unit}</span></div>)}
-                              {ings.length > 4 && <div style={{ fontSize: '11px', color: '#aaa', padding: '4px 0' }}>+{ings.length - 4} more</div>}
-                            </div>
+                            {!isPurchased && (
+                              <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '10px' }}>
+                                {ings.slice(0, 4).map(ing => <div key={ing.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0', borderBottom: '1px solid #f9f9f9' }}><span style={{ color: '#555' }}>{getIngredientName(ing)}</span><span style={{ color: '#aaa' }}>{ing.quantity} {ing.unit}</span></div>)}
+                                {ings.length > 4 && <div style={{ fontSize: '11px', color: '#aaa', padding: '4px 0' }}>+{ings.length - 4} more</div>}
+                              </div>
+                            )}
                             {item.notes && <div style={{ marginTop: '8px', fontSize: '11px', color: '#aaa', fontStyle: 'italic' }}>{item.notes}</div>}
                           </div>
                         </div>
