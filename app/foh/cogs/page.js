@@ -110,7 +110,7 @@ export default function COGS() {
   const [isMobile, setIsMobile] = useState(false)
   const [spiritForm, setSpiritForm] = useState({ name: '', category: '', bottle_size_oz: '', bottle_cost: '', distributor: '', notes: '' })
   const [recipeForm, setRecipeForm] = useState({ name: '', menu_price: '', target_cost_pct: '0.20' })
-  const [recipeIngs, setRecipeIngs] = useState([{ spirit_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
+  const [recipeIngs, setRecipeIngs] = useState([{ source_type: 'spirit', source_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
   const [prepIngForm, setPrepIngForm] = useState({ name: '', unit: '', cost_per_unit: '' })
   const [prepItemForm, setPrepItemForm] = useState({ name: '', category: '', yield_amount: '', yield_unit: 'oz', notes: '', source_type: 'made', purchase_cost: '' })
   const [prepItemIngs, setPrepItemIngs] = useState([{ source_type: 'prep_ingredient', source_id: '', quantity: '', unit: 'oz' }])
@@ -158,15 +158,6 @@ export default function COGS() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const getRecipeCost = (recipe) => {
-    const ings = recipeIngredients.filter(ri => ri.recipe_id === recipe.id)
-    return ings.reduce((total, ing) => {
-      const spirit = spirits.find(s => s.id === ing.spirit_id)
-      if (!spirit) return total
-      return total + costOz(spirit) * unitToOz(ing.quantity, ing.unit)
-    }, 0)
-  }
-
   const getPrepItemCost = (prepItem) => {
     if (prepItem.source_type === 'purchased') return parseFloat(prepItem.purchase_cost) || 0
     const ings = prepItemIngredients.filter(pii => pii.prep_item_id === prepItem.id)
@@ -190,6 +181,57 @@ export default function COGS() {
     }, 0)
   }
 
+  // Recipe ingredients can pull from spirits, prep items, or prep ingredients.
+  // ing.source_type / ing.source_id are the canonical fields; ing.spirit_id is
+  // kept as a fallback for rows saved before this was added (source_type
+  // defaults to 'spirit' and source_id falls back to spirit_id).
+  const getRecipeIngredientCost = (ing) => {
+    const sourceType = ing.source_type || 'spirit'
+    const sourceId = ing.source_id || ing.spirit_id
+    const qty = parseFloat(ing.quantity)
+    if (!sourceId || !qty) return 0
+    const ozQty = unitToOz(qty, ing.unit)
+
+    if (sourceType === 'spirit') {
+      const spirit = spirits.find(s => s.id === sourceId)
+      if (!spirit) return 0
+      return costOz(spirit) * ozQty
+    }
+    if (sourceType === 'prep_item') {
+      const item = prepItems.find(p => p.id === sourceId)
+      if (!item || !item.yield_amount) return 0
+      const perUnitCost = getPrepItemCost(item) / item.yield_amount
+      return perUnitCost * convertQty(ozQty, 'oz', item.yield_unit)
+    }
+    if (sourceType === 'prep_ingredient') {
+      const pi = prepIngredients.find(p => p.id === sourceId)
+      if (!pi) return 0
+      return pi.cost_per_unit * convertQty(ozQty, 'oz', pi.unit)
+    }
+    return 0
+  }
+
+  const getRecipeIngredientName = (ing) => {
+    const sourceType = ing.source_type || 'spirit'
+    const sourceId = ing.source_id || ing.spirit_id
+    if (sourceType === 'spirit') return spirits.find(s => s.id === sourceId)?.name || ing.ingredient_name || '--'
+    if (sourceType === 'prep_item') return prepItems.find(p => p.id === sourceId)?.name || '--'
+    if (sourceType === 'prep_ingredient') return prepIngredients.find(p => p.id === sourceId)?.name || '--'
+    return ing.ingredient_name || '--'
+  }
+
+  const getSourceName = (sourceType, sourceId) => {
+    if (sourceType === 'spirit') return spirits.find(s => s.id === sourceId)?.name || ''
+    if (sourceType === 'prep_item') return prepItems.find(p => p.id === sourceId)?.name || ''
+    if (sourceType === 'prep_ingredient') return prepIngredients.find(p => p.id === sourceId)?.name || ''
+    return ''
+  }
+
+  const getRecipeCost = (recipe) => {
+    const ings = recipeIngredients.filter(ri => ri.recipe_id === recipe.id)
+    return ings.reduce((total, ing) => total + getRecipeIngredientCost(ing), 0)
+  }
+
   const getIngredientName = (ing) => {
     if (ing.source_type === 'prep_ingredient') return prepIngredients.find(p => p.id === ing.source_id)?.name || '--'
     if (ing.source_type === 'spirit') return spirits.find(s => s.id === ing.source_id)?.name || '--'
@@ -197,11 +239,7 @@ export default function COGS() {
     return '--'
   }
 
-  const liveRecipeCost = () => recipeIngs.reduce((total, ing) => {
-    const spirit = spirits.find(s => s.id === ing.spirit_id)
-    if (!spirit || !ing.quantity) return total
-    return total + costOz(spirit) * unitToOz(parseFloat(ing.quantity), ing.unit)
-  }, 0)
+  const liveRecipeCost = () => recipeIngs.reduce((total, ing) => total + getRecipeIngredientCost(ing), 0)
 
   const livePrepCost = () => prepItemIngs.reduce((total, ing) => {
     if (!ing.source_id || !ing.quantity) return total
@@ -299,9 +337,15 @@ export default function COGS() {
       const { data } = await supabase.from('recipes').insert({ name: recipeForm.name, menu_price: parseFloat(recipeForm.menu_price) || 0, target_cost_pct: parseFloat(recipeForm.target_cost_pct) || 0.20, user_id: session.user.id }).select().single()
       recipeId = data.id
     }
-    const validIngs = recipeIngs.filter(i => i.spirit_id && i.quantity)
+    const validIngs = recipeIngs.filter(i => i.source_id && i.quantity)
     if (validIngs.length > 0) {
-      await supabase.from('recipe_ingredients').insert(validIngs.map(i => ({ recipe_id: recipeId, user_id: session.user.id, spirit_id: i.spirit_id, ingredient_name: spirits.find(s => s.id === i.spirit_id)?.name || '', quantity: parseFloat(i.quantity), unit: i.unit })))
+      await supabase.from('recipe_ingredients').insert(validIngs.map(i => ({
+        recipe_id: recipeId, user_id: session.user.id,
+        source_type: i.source_type, source_id: i.source_id,
+        spirit_id: i.source_type === 'spirit' ? i.source_id : null,
+        ingredient_name: getSourceName(i.source_type, i.source_id),
+        quantity: parseFloat(i.quantity), unit: i.unit
+      })))
     }
     await loadData(session.user.id); setShowRecipeForm(false); setSaving(false)
   }
@@ -311,10 +355,16 @@ export default function COGS() {
       setRecipeForm({ name: recipe.name, menu_price: recipe.menu_price, target_cost_pct: recipe.target_cost_pct })
       setEditingRecipeId(recipe.id)
       const ings = recipeIngredients.filter(ri => ri.recipe_id === recipe.id)
-      setRecipeIngs(ings.length ? ings.map(i => ({ spirit_id: i.spirit_id, ingredient_name: i.ingredient_name, quantity: i.quantity, unit: i.unit })) : [{ spirit_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
+      setRecipeIngs(ings.length ? ings.map(i => ({
+        source_type: i.source_type || 'spirit',
+        source_id: i.source_id || i.spirit_id,
+        ingredient_name: i.ingredient_name,
+        quantity: i.quantity,
+        unit: i.unit
+      })) : [{ source_type: 'spirit', source_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
     } else {
       setRecipeForm({ name: '', menu_price: '', target_cost_pct: '0.20' }); setEditingRecipeId(null)
-      setRecipeIngs([{ spirit_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
+      setRecipeIngs([{ source_type: 'spirit', source_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
     }
     setShowRecipeForm(true)
   }
@@ -566,14 +616,24 @@ export default function COGS() {
                 </div>
                 <div style={{ fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: '8px' }}>Ingredients</div>
                 {recipeIngs.map((ing, i) => (
-                  <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 60px 28px' : '2fr 1fr 1fr auto', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
-                    <select style={inputStyle} value={ing.spirit_id} onChange={e => setRecipeIngs(ri => ri.map((r, j) => j === i ? { ...r, spirit_id: e.target.value } : r))}><option value="">-- Select spirit --</option>{spirits.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+                  <div key={i} style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 60px 60px 28px' : '1fr 2fr 1fr 1fr auto', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+                    <select style={inputStyle} value={ing.source_type} onChange={e => setRecipeIngs(ri => ri.map((r, j) => j === i ? { ...r, source_type: e.target.value, source_id: '' } : r))}>
+                      <option value="spirit">Spirit</option>
+                      <option value="prep_item">Prep Item</option>
+                      <option value="prep_ingredient">Prep Ing</option>
+                    </select>
+                    <select style={inputStyle} value={ing.source_id} onChange={e => setRecipeIngs(ri => ri.map((r, j) => j === i ? { ...r, source_id: e.target.value } : r))}>
+                      <option value="">-- Select --</option>
+                      {ing.source_type === 'spirit' && spirits.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      {ing.source_type === 'prep_item' && prepItems.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                      {ing.source_type === 'prep_ingredient' && prepIngredients.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
                     <input style={inputStyle} type="number" step="0.01" placeholder="qty" value={ing.quantity} onChange={e => setRecipeIngs(ri => ri.map((r, j) => j === i ? { ...r, quantity: e.target.value } : r))} />
                     <select style={inputStyle} value={ing.unit} onChange={e => setRecipeIngs(ri => ri.map((r, j) => j === i ? { ...r, unit: e.target.value } : r))}>{UNITS.map(u => <option key={u}>{u}</option>)}</select>
                     <button onClick={() => setRecipeIngs(ri => ri.length > 1 ? ri.filter((_, j) => j !== i) : ri)} style={{ background: '#333', border: 'none', color: '#fff', width: '28px', height: '36px', borderRadius: '6px', cursor: 'pointer', fontSize: '14px' }}>×</button>
                   </div>
                 ))}
-                <button onClick={() => setRecipeIngs(ri => [...ri, { spirit_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])} style={{ width: '100%', border: '1px dashed #e0e0e0', background: 'none', color: '#aaa', padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '14px' }}>+ Add Ingredient</button>
+                <button onClick={() => setRecipeIngs(ri => [...ri, { source_type: 'spirit', source_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])} style={{ width: '100%', border: '1px dashed #e0e0e0', background: 'none', color: '#aaa', padding: '8px', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '14px' }}>+ Add Ingredient</button>
                 {liveRecipeCost() > 0 && recipeForm.menu_price > 0 && (
                   <div style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '10px', padding: '14px', marginBottom: '14px', display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: '10px', textAlign: 'center' }}>
                     {[
@@ -612,7 +672,7 @@ export default function COGS() {
                           {[{ label: 'Menu Price', val: fmt(r.menu_price) }, { label: 'Total Cost', val: fmt(cost) }, { label: 'Actual %', val: Math.round(pct * 1000) / 10 + '%', color: onBudget ? '#3B6D11' : '#E24B4A' }, { label: 'Target %', val: Math.round(r.target_cost_pct * 100) + '%', color: '#c89000' }].map(m => <div key={m.label} style={{ background: '#f5f5f3', borderRadius: '8px', padding: '8px 10px' }}><div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px' }}>{m.label}</div><div style={{ fontSize: '14px', fontWeight: '700', color: m.color || '#000' }}>{m.val}</div></div>)}
                         </div>
                         <div style={{ borderTop: '1px solid #f0f0f0', paddingTop: '10px' }}>
-                          {ings.slice(0, 4).map(ing => { const sp = spirits.find(s => s.id === ing.spirit_id); const icost = sp ? fmt(costOz(sp) * unitToOz(ing.quantity, ing.unit)) : '--'; return <div key={ing.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0', borderBottom: '1px solid #f9f9f9' }}><span style={{ color: '#555' }}>{ing.ingredient_name}</span><span style={{ color: '#aaa' }}>{ing.quantity} {ing.unit}</span><span style={{ fontWeight: '500', color: '#000' }}>{icost}</span></div> })}
+                          {ings.slice(0, 4).map(ing => { const icost = fmt(getRecipeIngredientCost(ing)); return <div key={ing.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0', borderBottom: '1px solid #f9f9f9' }}><span style={{ color: '#555' }}>{getRecipeIngredientName(ing)}</span><span style={{ color: '#aaa' }}>{ing.quantity} {ing.unit}</span><span style={{ fontWeight: '500', color: '#000' }}>{icost}</span></div> })}
                           {ings.length > 4 && <div style={{ fontSize: '11px', color: '#aaa', padding: '4px 0' }}>+{ings.length - 4} more</div>}
                         </div>
                       </div>
