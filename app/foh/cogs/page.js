@@ -14,26 +14,26 @@ const labelStyle = { display: 'block', fontSize: '11px', color: '#999', marginBo
 
 const fmt = (n) => '$' + Number(n).toFixed(2)
 
-const convertToBase = (qty, fromUnit) => {
-  const weightToG = { g: 1, oz_w: 28.3495, lb: 453.592 }
-  const volumeToMl = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588, oz: 29.5735, fl_oz: 29.5735, pt: 473.176, qt: 946.353 }
-  if (weightToG[fromUnit] !== undefined) return { base: qty * weightToG[fromUnit], type: 'weight' }
-  if (volumeToMl[fromUnit] !== undefined) return { base: qty * volumeToMl[fromUnit], type: 'volume' }
-  return { base: qty, type: 'unknown' }
-}
-
-const convertFromBase = (base, toUnit, type) => {
-  const weightFromG = { g: 1, oz_w: 28.3495, lb: 453.592 }
-  const volumeFromMl = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588, oz: 29.5735, fl_oz: 29.5735, pt: 473.176, qt: 946.353 }
-  if (type === 'weight' && weightFromG[toUnit]) return base / weightFromG[toUnit]
-  if (type === 'volume' && volumeFromMl[toUnit]) return base / volumeFromMl[toUnit]
-  return base
-}
+// Weight and volume conversion tables. Note 'oz' intentionally appears in
+// BOTH tables with its correct value for each context (28.3495g for a
+// weight ounce, 29.5735ml for a fluid ounce). convertQty picks whichever
+// table has BOTH the source and target units defined, so e.g. grams <-> oz
+// for a dry ingredient (sugar) uses the weight value, while oz <-> ml/cup/tbsp
+// for a liquid uses the volume value.
+const WEIGHT_TO_G = { g: 1, oz: 28.3495, lb: 453.592 }
+const VOLUME_TO_ML = { ml: 1, l: 1000, tsp: 4.92892, tbsp: 14.7868, cup: 236.588, oz: 29.5735, fl_oz: 29.5735, pt: 473.176, qt: 946.353 }
 
 const convertQty = (qty, fromUnit, toUnit) => {
   if (fromUnit === toUnit) return qty
-  const { base, type } = convertToBase(qty, fromUnit)
-  return convertFromBase(base, toUnit, type)
+  if (WEIGHT_TO_G[fromUnit] !== undefined && WEIGHT_TO_G[toUnit] !== undefined) {
+    return qty * WEIGHT_TO_G[fromUnit] / WEIGHT_TO_G[toUnit]
+  }
+  if (VOLUME_TO_ML[fromUnit] !== undefined && VOLUME_TO_ML[toUnit] !== undefined) {
+    return qty * VOLUME_TO_ML[fromUnit] / VOLUME_TO_ML[toUnit]
+  }
+  // Units span weight <-> volume with no density given — return unconverted
+  // rather than silently mixing scales.
+  return qty
 }
 
 const unitToOz = (qty, unit) => {
@@ -130,16 +130,6 @@ export default function COGS() {
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) { router.push('/auth/login'); return }
-      await loadData(session.user.id)
-      setLoading(false)
-    }
-    init()
-  }, [])
-
   const loadData = async (userId) => {
     const [{ data: sp }, { data: rc }, { data: ri }, { data: pi }, { data: pit }, { data: pii }] = await Promise.all([
       supabase.from('spirits').select('*').eq('user_id', userId).order('name'),
@@ -156,6 +146,17 @@ export default function COGS() {
     setPrepItems(pit || [])
     setPrepItemIngredients(pii || [])
   }
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth/login'); return }
+      await loadData(session.user.id)
+      setLoading(false)
+    }
+    init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const getRecipeCost = (recipe) => {
     const ings = recipeIngredients.filter(ri => ri.recipe_id === recipe.id)
