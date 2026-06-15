@@ -339,13 +339,17 @@ export default function COGS() {
     }
     const validIngs = recipeIngs.filter(i => i.source_id && i.quantity)
     if (validIngs.length > 0) {
-      await supabase.from('recipe_ingredients').insert(validIngs.map(i => ({
+      const { error: ingError } = await supabase.from('recipe_ingredients').insert(validIngs.map(i => ({
         recipe_id: recipeId, user_id: session.user.id,
         source_type: i.source_type, source_id: i.source_id,
         spirit_id: i.source_type === 'spirit' ? i.source_id : null,
         ingredient_name: getSourceName(i.source_type, i.source_id),
         quantity: parseFloat(i.quantity), unit: i.unit
       })))
+      if (ingError) {
+        console.error('saveRecipeForm ingredients error:', ingError)
+        alert('Recipe saved, but ingredients failed to save: ' + ingError.message)
+      }
     }
     await loadData(session.user.id); setShowRecipeForm(false); setSaving(false)
   }
