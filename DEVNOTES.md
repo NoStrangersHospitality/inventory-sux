@@ -1,169 +1,689 @@
-# Inventory Sux — Dev Notes
+'use client'
 
-Living reference for patterns, conventions, and gotchas established during development. Paste this at the start of a new chat session along with whatever file(s) you're working on — it gives Claude the "why" behind the code so we stop re-litigating settled decisions and reintroducing fixed bugs.
+import { useEffect, useState, useRef, Suspense } from 'react'
+import { createBrowserClient } from '@supabase/ssr'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useRole } from '@/hooks/useRole'
 
-**Update this file** whenever a new pattern, gotcha, or schema change gets established. Treat it as part of the deliverable for any session that introduces something future sessions need to know.
+function Order() {
+  const [items, setItems] = useState([])
+  const [distributors, setDistributors] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [step, setStep] = useState('select')
+  const [selectedCats, setSelectedCats] = useState(new Set(['liquor', 'beer', 'wine', 'misc']))
+  const [orderRows, setOrderRows] = useState({})
+  const [recapRows, setRecapRows] = useState({})
+  const [submitting, setSubmitting] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
+  const [draftOrder, setDraftOrder] = useState(null)
+  const [readyOrder, setReadyOrder] = useState(null)
+  const [isMobile, setIsMobile] = useState(false)
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { can, ownerId } = useRole()
+  const initRan = useRef(false)
 
----
+  const supabase = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  )
 
-## Core Architecture
+  const CATEGORIES = [
+    { key: 'liquor', label: 'Liquor', icon: '🍾' },
+    { key: 'beer', label: 'Beer', icon: '🍺' },
+    { key: 'wine', label: 'Wine', icon: '🍷' },
+    { key: 'misc', label: 'Misc', icon: '📦' },
+  ]
 
-- **Stack**: Next.js (App Router) + Supabase (Postgres + Auth + Storage) + Vercel + Stripe + SendGrid + Twilio
-- **Repo**: `NoStrangersHospitality/inventory-sux`
-- **Production URL**: `app.inventorysux.com`
-- **Areas**: The app is split into **FOH** (front of house — bar/spirits/wine) and **BOH** (back of house — kitchen). Most tables have an `area` column (`'foh'` | `'boh'`) and pages live under `app/foh/...` and `app/boh/...` with largely parallel structure.
+  const getDefaultUnit = (item) => {
+    if (item.category === 'wine') return 'case'
+    if (item.category === 'liquor') return 'bottle'
+    if (item.category === 'beer') {
+      if (item.item_type === 'keg') return 'keg'
+      return item.unit || 'bottle'
+    }
+    return item.unit || 'bottle'
+  }
 
----
+  const canSwitchUnit = (item) => {
+    if (item.category === 'beer' && item.item_type === 'keg') return false
+    if (item.category === 'misc') return false
+    return true
+  }
 
-## Data Ownership Model — `ownerId` pattern
+  const getUnitOptions = (item) => {
+    if (item.category === 'liquor') return ['bottle', 'case']
+    if (item.category === 'wine') return ['case', 'bottle']
+    if (item.category === 'beer') {
+      if (item.item_type === 'keg') return ['keg']
+      return [item.unit || 'bottle', 'case']
+    }
+    return [item.unit || 'bottle']
+  }
 
-**This is the single most important pattern in the app and the most common source of regressions.**
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
-- Auth session = the logged-in user (could be an owner OR a staff member).
-- All data queries must use the **owner's** user ID, not the session user's ID directly.
-- `useRole()` hook (`hooks/useRole.js`) returns `ownerId = profile.owner_user_id || session.user.id`.
-  - For an **owner**, `owner_user_id` is null, so `ownerId` falls back to their own session ID.
-  - For **staff**, `owner_user_id` points to the owner's ID, so `ownerId` resolves to the owner.
+  useEffect(() => {
+    if (!ownerId) return
+    if (initRan.current) return
+    initRan.current = true
 
-### ✅ Correct pattern (use this everywhere):
-```js
-const { ownerId } = useRole()
-const { data: { session } } = await supabase.auth.getSession()
-const ownerIdToUse = ownerId || session.user.id
-```
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth/login'); return }
 
-### ❌ Anti-pattern — DO NOT introduce `ownerIdResolved` state
-We've repeatedly added a `useState` called `ownerIdResolved` that gets set once during `init()` and then referenced in other functions (`saveInvoice`, `approveInvoice`, `handleFileUpload`, etc.). **This breaks** because:
-- State can be stale/null if the function fires before `init()` completes, or after a refresh.
-- `ownerId` from `useRole()` is always live — there's no reason to cache it in local state.
+      const ownerIdToUse = ownerId || session.user.id
 
-**If you see `ownerIdResolved` anywhere, replace it with `ownerId || session.user.id` inline and remove the state.**
+      const [{ data: itemData }, { data: distData }] = await Promise.all([
+        supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'foh').eq('on_menu', true).order('name'),
+        supabase.from('distributors').select('*').eq('user_id', ownerIdToUse).order('name')
+      ])
+      const fetchedItems = itemData || []
+      const fetchedDists = distData || []
+      setItems(fetchedItems)
+      setDistributors(fetchedDists)
 
-### `initRan` ref pattern
-Every page using `useRole()` should guard its init `useEffect` with a ref to prevent double-init when `ownerId` changes from `null` → resolved value:
+      const buildByDistFromItems = () => {
+        const byDist = {}
+        CATEGORIES.forEach(c => {
+          fetchedItems.filter(i => i.category === c.key).forEach(item => {
+            const dist = fetchedDists.find(d => d.id === item.distributor_id)
+            const key = dist ? dist.name : 'Unassigned'
+            if (!byDist[key]) byDist[key] = []
+            byDist[key].push({ ...item, catLabel: c.label, distName: key, distObj: dist, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
+          })
+        })
+        return byDist
+      }
 
-```js
-const initRan = useRef(false)
+      const buildByDistFromLines = (lines) => {
+        const byDist = {}
+        lines.forEach(line => {
+          const key = line.distributor_name || 'Unassigned'
+          if (!byDist[key]) byDist[key] = []
+          const item = fetchedItems.find(i => i.id === line.item_id)
+          if (!item) return
+          const dist = fetchedDists.find(d => d.id === line.distributor_id)
+          const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
+          byDist[key].push({
+            ...item, catLabel, distName: key, distObj: dist,
+            on_hand_count: line.shelf_count || 0,
+            suggested: line.suggested_qty || 0,
+            line_id: line.id,
+          })
+        })
+        return byDist
+      }
 
-useEffect(() => {
-  if (!ownerId) return
-  if (initRan.current) return
-  initRan.current = true
+      const resumeId = searchParams.get('resume')
+      if (resumeId) {
+        const { data: existingOrder } = await supabase
+          .from('orders').select('*').eq('id', resumeId).eq('user_id', ownerIdToUse).single()
 
-  const init = async () => { /* ... */ }
-  init()
-}, [ownerId])
-```
+        if (existingOrder) {
+          const { data: lines } = await supabase
+            .from('order_lines').select('*').eq('order_id', existingOrder.id)
 
----
+          if (existingOrder.status === 'draft') {
+            setDraftOrder(existingOrder)
+            const byDist = lines && lines.length > 0 ? buildByDistFromLines(lines) : buildByDistFromItems()
+            setOrderRows(byDist)
+            setStep('sheet')
+          } else if (existingOrder.status === 'ready' && lines && lines.length > 0) {
+            setReadyOrder(existingOrder)
+            const byDist = buildByDistFromLines(lines)
+            const rd = {}
+            Object.keys(byDist).forEach(dn => {
+              const needed = byDist[dn].filter(r => r.suggested > 0)
+              if (needed.length) rd[dn] = needed.map(r => ({
+                ...r, overrideQty: r.suggested, finalQty: r.suggested,
+                orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
+              }))
+            })
+            // Guard: if every item is now at/above par, rd ends up empty.
+            // Don't land on a blank recap screen — bounce back to the hub instead.
+            // (Previously this would set step('recap') with an empty recapRows,
+            // and hitting Mark as Ready / Submit Order from there would wipe
+            // the existing order_lines down to 0.)
+            if (Object.keys(rd).length === 0) {
+              alert('All items on this order are now at or above par — nothing left to order.')
+              router.push('/foh/ordering')
+            } else {
+              setOrderRows(byDist)
+              setRecapRows(rd)
+              setStep('recap')
+            }
+          }
+        }
+      }
 
-## Auth & Admin
+      setLoading(false)
+    }
+    init()
+  }, [ownerId, searchParams])
 
-- `profiles.is_admin` (boolean) gates access to `/admin`.
-- **Login redirect**: `app/auth/login/page.js` checks `is_admin` after `signInWithPassword` and routes to `/admin` vs `/dashboard`. The OAuth callback (`app/auth/callback/route.js`) does the same check for magic-link/OAuth flows.
-- **Pure admin accounts** (e.g. `billy@inventorysux.com`) have no `bar_name`, no subscription — `subscription_status` can be null. They always land on `/admin`.
-- **Real subscriber accounts** that also happen to have `is_admin = true` (e.g. Billy's main Blacksheep account) will ALSO redirect to `/admin` on login — there's a "← App" button in the admin topbar to get back to `/dashboard`. This is a known minor friction point, not yet fixed for dual-purpose accounts.
-- **Add Admin** button on `/admin` → `app/api/admin/create-admin/route.js` creates a new auth user + profile with `is_admin: true`, `subscription_status: 'comp'`, and sends a password-setup email via `resetPasswordForEmail`.
-- **Supabase Auth → URL Configuration → Site URL** must be `https://app.inventorysux.com` (not localhost) or password reset / confirmation links break. This was a real incident — Site URL had reverted to localhost and broke reset emails until fixed.
-- Creating auth users directly via SQL (`insert into auth.users ...`) is fragile — login can fail with "Database error querying schema" even when the row looks correct. **Prefer Supabase Dashboard → Authentication → Add User** (with Auto Confirm) over raw SQL inserts. If you must fix a password via SQL, use:
-  ```sql
-  update auth.users set encrypted_password = crypt('NewPass123!', gen_salt('bf')) where email = '...';
-  ```
-- Supabase sometimes caches deleted user emails for a few minutes ("already registered" error after delete) — wait or use a temp email and rename via SQL after.
+  const toggleCat = (cat) => {
+    setSelectedCats(prev => {
+      const next = new Set(prev)
+      next.has(cat) ? next.delete(cat) : next.add(cat)
+      return next
+    })
+  }
 
----
+  const buildOrderSheet = () => {
+    const allItems = []
+    CATEGORIES.filter(c => selectedCats.has(c.key)).forEach(c => {
+      items.filter(i => i.category === c.key).forEach(item => {
+        allItems.push({ ...item, catLabel: c.label })
+      })
+    })
+    if (!allItems.length) { alert('No items in selected categories.'); return }
+    const byDist = {}
+    allItems.forEach(item => {
+      const dist = distributors.find(d => d.id === item.distributor_id)
+      const key = dist ? dist.name : 'Unassigned'
+      if (!byDist[key]) byDist[key] = []
+      byDist[key].push({ ...item, distName: key, distObj: dist, on_hand_count: 0, total: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
+    })
+    setOrderRows(byDist)
+    setStep('sheet')
+  }
 
-## Staff / Team Roles
+  const updateRow = async (distName, idx, field, val) => {
+    setOrderRows(prev => {
+      const next = { ...prev }
+      const rows = [...next[distName]]
+      rows[idx] = { ...rows[idx], [field]: val }
+      const row = rows[idx]
+      const par = field === 'par' ? val : (row.par || 0)
+      const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
+      rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
+      next[distName] = rows
+      return next
+    })
+    if (field === 'par') {
+      const { data: { session } } = await supabase.auth.getSession()
+      const row = orderRows[distName][idx]
+      if (row?.id) await supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
+    }
+    if (draftOrder) {
+      const row = orderRows[distName][idx]
+      if (row?.line_id) {
+        const updateData = {}
+        if (field === 'on_hand_count') updateData.shelf_count = parseFloat(val) || 0
+        if (field === 'par') updateData.par = parseFloat(val) || 0
+        if (Object.keys(updateData).length) await supabase.from('order_lines').update(updateData).eq('id', row.line_id)
+      }
+    }
+  }
 
-- `profiles.team_role` and `profiles.owner_user_id` identify staff accounts.
-- `profiles.boh_access` gates BOH visibility for staff.
-- BOH page guards: `if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }` — owners always pass (no `owner_user_id`), staff need `boh_access`.
-- Dashboard BOH tile: `canBOH = can('view_boh') && (isOwner ? profile?.boh_access : true)` — staff with `boh_staff` role see the tile regardless of the owner's own `boh_access` flag.
+  const saveDraft = async () => {
+    setSaving(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
+    let order = draftOrder
 
----
+    if (!order) {
+      const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
+        user_id: ownerIdToUse, status: 'draft', area: 'foh',
+        receiving_status: 'pending', created_at: new Date().toISOString()
+      }).select().single()
+      if (orderError || !newOrder) {
+        console.error('saveDraft order insert error:', orderError)
+        setSaving(false)
+        alert('Failed to create draft order. Please try again.')
+        return
+      }
+      order = newOrder
+      setDraftOrder(order)
+    } else {
+      await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
 
-## Invoice Scanning & Approval Flow
+    const lines = []
+    Object.keys(orderRows).forEach(dn => {
+      orderRows[dn].forEach(row => {
+        lines.push({
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.suggested,
+        })
+      })
+    })
 
-**Two-step flow**: Scan → Review/Match → **Save for Approval** (writes `invoice_lines`, no inventory changes, status → `processed`) → Hub shows **Approve** button on `processed` invoices → **Approve** reads saved lines and writes to `inventory_items` + `inventory_history`, status → `confirmed`.
+    const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
+    if (linesError) console.error('saveDraft lines error:', linesError)
 
-### `invoices.status` — CHECK CONSTRAINT
-Only allows: `'pending'`, `'processing'`, `'processed'`, `'confirmed'`. **`'scanned'` is NOT allowed** — use `'processed'` for the initial upload status (we use `processed` for both "just scanned" and "saved, awaiting approval" — there's no separate scanned state).
+    const updatedRows = { ...orderRows }
+    insertedLines?.forEach(line => {
+      const distRows = updatedRows[line.distributor_name]
+      if (!distRows) return
+      const idx = distRows.findIndex(r => r.id === line.item_id)
+      if (idx >= 0) updatedRows[line.distributor_name][idx].line_id = line.id
+    })
+    setOrderRows(updatedRows)
+    setSaving(false)
+    router.push('/foh/ordering')
+  }
 
-### `invoice_lines.match_status` — CHECK CONSTRAINT
-Allows: `'matched'`, `'unmatched'`, `'manual'`, `'create_new'`, `'low_confidence'`. (Originally only allowed `matched`/`unmatched`/`manual` — had to be widened.)
+  const buildRecap = () => {
+    const rd = {}
+    Object.keys(orderRows).forEach(dn => {
+      const needed = orderRows[dn].filter(r => r.suggested > 0)
+      if (needed.length) rd[dn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
+    })
+    if (!Object.keys(rd).length) { alert('No items need ordering.'); return }
+    setRecapRows(rd)
+    setStep('recap')
+  }
 
-### `invoice_lines` schema (additions beyond original)
-```sql
-alter table invoice_lines add column if not exists is_create_new boolean default false;
-alter table invoice_lines add column if not exists new_category text;
-alter table invoice_lines add column if not exists case_size integer default 1;
-alter table invoice_lines add column if not exists item_number text;
-```
-- `item_number` carries the distributor SKU from the scan through to `inventory_items.item_number` on approve (for both new items and matches).
-- `is_create_new` flags lines that should create a brand-new `inventory_items` row on approve.
-- `case_size` is used to convert invoice qty (cases) → `on_hand` units, and to back-calculate per-unit cost from case cost for BOH items.
+  const updateRecapQty = (distName, idx, qty) => {
+    setRecapRows(prev => {
+      const next = { ...prev }
+      const rows = [...next[distName]]
+      rows[idx] = { ...rows[idx], overrideQty: qty, finalQty: qty }
+      next[distName] = rows
+      return next
+    })
+  }
 
-### `/api/scan-invoice` (Claude Haiku OCR)
-- Extracts `vendor`, `invoice_number`, `invoice_date`, `total_amount`, and `line_items[]` with `raw_name`, `item_number`, `qty`, `unit`, `unit_cost`, `total_cost`.
-- Does SKU-first matching against `inventory_items.item_number`, falls back to fuzzy name matching (`similarityScore`).
-- Match statuses: `matched` (SKU or high name-similarity), `low_confidence` (weak name match), `create_new` (user selected "+ Create new item"), `unmatched`.
+  const updateRecapUnit = (distName, idx, unit) => {
+    setRecapRows(prev => {
+      const next = { ...prev }
+      const rows = [...next[distName]]
+      rows[idx] = { ...rows[idx], orderUnit: unit }
+      next[distName] = rows
+      return next
+    })
+  }
 
-### FOH vs BOH approve differences
-- **FOH**: `unit_cost` on new/updated items = invoice unit_cost directly (cost is per-bottle/unit as scanned).
-- **BOH**: case-based items — `unit_cost` = `unit_cost / case_size` when `case_size > 1` (storing per-unit cost, not per-case), and `on_hand` increments by `qty * case_size`.
+  const markAsReady = async () => {
+    // Guard: never delete existing order_lines and replace them with
+    // an empty set. If recapRows is empty there's nothing to write,
+    // and proceeding would wipe out a previously-saved order.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to mark as ready.')
+      return
+    }
+    setSaving(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
+    let order = draftOrder || readyOrder
+    if (!order) {
+      const { data: newOrder } = await supabase.from('orders').insert({
+        user_id: ownerIdToUse, status: 'ready', area: 'foh',
+        receiving_status: 'pending', created_at: new Date().toISOString()
+      }).select().single()
+      order = newOrder
+    } else {
+      await supabase.from('orders').update({ status: 'ready' }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
+    const lines = []
+    Object.keys(recapRows).forEach(dn => {
+      recapRows[dn].forEach(row => {
+        lines.push({
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null,
+        })
+      })
+    })
+    await supabase.from('order_lines').insert(lines)
+    setReadyOrder(order)
+    setSaving(false)
+    router.push('/foh/ordering')
+  }
 
----
+  const submitOrder = async () => {
+    // Same guard as markAsReady — don't wipe order_lines with an empty insert.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to submit.')
+      return
+    }
+    setSubmitting(true)
+    const { data: { session } } = await supabase.auth.getSession()
+    const ownerIdToUse = ownerId || session.user.id
+    const { data: profile } = await supabase.from('profiles').select('first_name, last_name, bar_name').eq('id', session.user.id).single()
+    const managerName = `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()
+    const barName = profile?.bar_name || 'Your Bar'
+    const orderDate = new Date().toLocaleDateString()
 
-## Email Reply Parsing (`app/api/email/reply/route.js`)
+    let order = draftOrder || readyOrder
+    if (!order) {
+      const { data: newOrder } = await supabase.from('orders').insert({
+        user_id: ownerIdToUse, status: 'submitted', area: 'foh',
+        receiving_status: 'pending', submitted_at: new Date().toISOString()
+      }).select().single()
+      order = newOrder
+    } else {
+      await supabase.from('orders').update({ status: 'submitted', submitted_at: new Date().toISOString() }).eq('id', order.id)
+      await supabase.from('order_lines').delete().eq('order_id', order.id)
+    }
 
-`extractReply()` strips the quoted thread/signature/security-banner noise from inbound SendGrid emails. Cuts at the first line matching: `From:`, `-----Original Message-----`, `-----Forwarded Message-----`, `On ... wrote:`, `Sent:`, `Inventory Sux New Order`, `Submitted by`, `Order #...`, `[EXTERNAL]`, `CAUTION:`, `WARNING:`, or any `>` quoted line. Everything above the cut is the real reply.
+    const lines = []
+    Object.keys(recapRows).forEach(dn => {
+      recapRows[dn].forEach(row => {
+        lines.push({
+          order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
+          distributor_id: row.distributor_id || null, distributor_name: dn,
+          par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null
+        })
+      })
+    })
 
-If you see raw email headers/CAUTION banners/quoted order text showing up in `order_replies.message`, this function needs another pattern added to `cutPatterns`.
+    const { error: linesError } = await supabase.from('order_lines').insert(lines)
+    if (linesError) console.error('Order lines insert error:', linesError)
 
----
+    const distributorGroups = {}
+    lines.forEach(line => {
+      if (!distributorGroups[line.distributor_name]) distributorGroups[line.distributor_name] = { name: line.distributor_name, id: line.distributor_id, lines: [] }
+      distributorGroups[line.distributor_name].lines.push(line)
+    })
 
-## COGS / Spirits Database
+    const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
+    const { data: distContacts } = await supabase.from('distributors').select('id, name, email, phone, order_method').in('id', distIds)
 
-- **Currently a SEPARATE system** from FOH inventory — `spirits` table (with `bottle_size_oz`, `bottle_cost`, `category` like "Bourbon"/"Liqueur"/etc., `distributor` as free text) vs `inventory_items` (with `unit_cost`, `on_hand`, `area`, `distributor_id` FK, category like "liquor"/"wine"/"beer"/"misc").
-- **Long-term plan (not yet started)**: merge `spirits` into `inventory_items`. This requires:
-  - Adding `bottle_size_oz` and a spirit-specific category field to `inventory_items`
-  - Migrating `recipe_ingredients.spirit_id` FKs to point at `inventory_items.id`
-  - Reconciling category vocabularies (spirit categories are granular: Bourbon/Rye/Scotch/etc.; inventory categories are broad: liquor/wine/beer/misc)
-- **Short-term bridge**: CSV export/import between the two systems. The Google Sheets COGS workbook (`COGS_WorkBook.xlsx`, sheet "🍾 Spirits Database") is the source of truth for current accurate bottle sizes/costs — more accurate than `inventory_items.unit_cost` which is mostly `0.0000` (never populated via invoices yet).
-- COGS spirits CSV import format: `Name, Category, Bottle Size (oz), Bottle Cost ($), Distributor, Notes`. Category is free text matching the `CATEGORIES` array in `app/foh/cogs/page.js` (Bourbon, Rye, Scotch, Irish, Japanese, Whiskey, Tequila, Mezcal, Vodka, Gin, Rum, Brandy, Liqueur, Aperitif, Bitters, Other).
+    for (const [distName, group] of Object.entries(distributorGroups)) {
+      const contact = distContacts?.find(d => d.id === group.id)
+      if (!contact) continue
+      const orderLines = group.lines.filter(l => l.final_qty > 0)
+      if (orderLines.length === 0) continue
+      if (contact.email && (contact.order_method?.toLowerCase() === 'email' || contact.order_method?.toLowerCase() === 'both')) {
+        try { await fetch('/api/email/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order email failed for', contact.name, err) }
+      }
+      if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
+        try { await fetch('/api/sms/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order SMS failed for', contact.name, err) }
+      }
+    }
 
----
+    try {
+      const distGroupsForPDF = Object.entries(distributorGroups).map(([name, group]) => {
+        const contact = distContacts?.find(d => d.id === group.id)
+        return { name, email: contact?.email || null, lines: group.lines.filter(l => l.final_qty > 0) }
+      }).filter(g => g.lines.length > 0)
+      const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
+      const pdfRes = await fetch('/api/orders/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems }) })
+      const pdfData = await pdfRes.json()
+      if (pdfData.pdfUrl) {
+        await fetch('/api/email/order-confirmation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems }) })
+      }
+    } catch (err) { console.error('PDF/email confirmation error:', err) }
 
-## Key Environment Variables / IDs
+    setSubmitting(false)
+    setSubmitted(true)
+  }
 
-- `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `NEXT_PUBLIC_APP_URL` — should be `https://app.inventorysux.com` (watch for localhost regressions)
-- Stripe live price IDs: FOH `price_1TbRALLCkHYfmSfEspfqqokK`, BOH `price_1TbRBVLCkHYfmSfEtxICvRMN`, Bundle `price_1TbRCJLCkHYfmSfE0sXdf9xS`
-- Twilio number `+14632232985`, current Messaging Service SID `MG7698c334fd5f54419510972470f976d1` (A2P 10DLC campaign approved/active as of this session)
-- Old Twilio Messaging Service `MG149ae6124d1a5a2921ff566c7912867c` — has a warning, check references before deleting
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
+    </div>
+  )
 
----
+  if (submitted) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', padding: '20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '48px 32px', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
+        <div style={{ fontSize: '52px', marginBottom: '16px' }}>✅</div>
+        <h2 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Order submitted!</h2>
+        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your order has been sent to your distributors.</p>
+        <button onClick={() => router.push('/foh/ordering')} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>← Back to Ordering</button>
+      </div>
+    </div>
+  )
 
-## Production Auth Users (reference)
+  return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+          <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
+        </div>
+        <button onClick={() => step === 'select' ? router.push('/foh/ordering') : setStep(step === 'recap' ? 'sheet' : 'select')}
+          style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
+          ← {step === 'select' ? 'Ordering' : step === 'sheet' ? 'Categories' : 'Order Sheet'}
+        </button>
+      </div>
 
-| Email | UID | Role |
-|---|---|---|
-| `billy.fredlund@uplandbrewing.com` | `e98897c2-...0343732` | Main Blacksheep owner account (comp, boh_access) |
-| `billy@inventorysux.com` | `9add3022-...193f09` | Pure admin account → `/admin` |
-| `test@inventorysux.com` | `8f21fbd8-...d9106f7` | Test bar account |
-| `bfredlund@geoacademies.org` | `e6f06797-...000dcda` | BOH staff test account |
-| `thefredlund5@gmail.com` | `42f9fc54-...e1b6b1` | Misc test account |
+      <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
 
----
+        {step === 'select' && (
+          <>
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Build Order</h1>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '20px' }}>Select which categories to include.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '12px', marginBottom: '20px' }}>
+              {CATEGORIES.map(c => {
+                const count = items.filter(i => i.category === c.key).length
+                const selected = selectedCats.has(c.key)
+                return (
+                  <div key={c.key} onClick={() => toggleCat(c.key)}
+                    style={{ background: '#fff', border: `2px solid ${selected ? '#F5B800' : '#e8e8e8'}`, borderRadius: '14px', padding: isMobile ? '16px' : '24px 16px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s', boxShadow: selected ? '0 2px 12px rgba(245,184,0,.12)' : 'none' }}>
+                    <div style={{ fontSize: isMobile ? '28px' : '32px', marginBottom: '6px' }}>{c.icon}</div>
+                    <div style={{ fontSize: isMobile ? '14px' : '15px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>{count} item{count !== 1 ? 's' : ''}</div>
+                  </div>
+                )
+              })}
+            </div>
+            <button onClick={buildOrderSheet} style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+              Build Order Sheet →
+            </button>
+          </>
+        )}
 
-## `order_lines` valid columns (reference — do not add `unit`/`category`, they don't exist)
-`id, order_id, user_id, item_id, item_name, distributor_id, distributor_name, par, shelf_count, well_count, suggested_qty, final_qty, created_at, org_id, location_id, received_qty, receiving_status`
+        {step === 'sheet' && (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+              <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Order Sheet</h1>
+              {draftOrder && <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>Draft saved</span>}
+            </div>
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#a07800' }}>
+              💡 Enter what you have on hand — suggested qty calculates automatically.
+            </div>
+            {Object.keys(orderRows).map(dn => {
+              const dist = distributors.find(d => d.name === dn)
+              return (
+                <div key={dn} style={{ marginBottom: '20px' }}>
+                  <div style={{ background: '#111', borderRadius: '10px 10px 0 0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '14px' }}>🚚</span>
+                    <span style={{ fontWeight: '600', color: '#fff', fontSize: '13px' }}>{dn}</span>
+                    {dist?.order_method && <span style={{ marginLeft: 'auto', background: '#F5B800', color: '#000', borderRadius: '10px', fontSize: '10px', padding: '2px 8px', fontWeight: '600' }}>{dist.order_method}</span>}
+                  </div>
+                  <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
+                    {isMobile ? (
+                      orderRows[dn].map((row, ri) => (
+                        <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>
+                            {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                            <div>
+                              <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
+                              <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>On Hand</div>
+                              <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Suggested</div>
+                              <div style={{ textAlign: 'center', padding: '6px', fontSize: '16px', fontWeight: '700', color: row.suggested > 0 ? '#3B6D11' : '#ccc' }}>{row.suggested}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>{['Product', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
+                            <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {orderRows[dn].map((row, ri) => (
+                            <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                              <td style={{ padding: '8px 10px', fontSize: '12px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
+                              <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
+                              <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
+                              <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                                <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                              </td>
+                              <td style={{ padding: '6px 8px', textAlign: 'center' }}>
+                                <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginTop: '8px' }}>
+              <button onClick={saveDraft} disabled={saving} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                {saving ? 'Saving...' : '💾 Save Draft'}
+              </button>
+              <button onClick={buildRecap} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+                Review Order →
+              </button>
+            </div>
+          </>
+        )}
 
----
+        {step === 'recap' && (
+          <>
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Recap</h1>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Adjust quantities and units if needed.</p>
+            {Object.keys(recapRows).map(dn => {
+              const dist = distributors.find(d => d.name === dn)
+              return (
+                <div key={dn} style={{ marginBottom: '20px' }}>
+                  <div style={{ background: '#111', borderRadius: '10px 10px 0 0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '14px' }}>🚚</span>
+                    <span style={{ fontWeight: '600', color: '#fff', fontSize: '13px' }}>{dn}</span>
+                    {dist?.email && !isMobile && <span style={{ fontSize: '11px', color: '#aaa', marginLeft: '8px' }}>{dist.email}</span>}
+                  </div>
+                  <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
+                    {isMobile ? (
+                      recapRows[dn].map((row, ri) => {
+                        const unitOptions = getUnitOptions(row)
+                        const canSwitch = canSwitchUnit(row)
+                        return (
+                          <div key={row.id} style={{ padding: '14px', borderBottom: '1px solid #f5f5f5' }}>
+                            <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '10px' }}>{row.name}</div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                              <div style={{ background: '#fafafa', borderRadius: '8px', padding: '8px 12px' }}>
+                                <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>On Hand</div>
+                                <div style={{ fontSize: '15px', fontWeight: '600', color: '#000' }}>{Number(row.on_hand_count || 0).toFixed(1)}</div>
+                              </div>
+                              <div style={{ background: '#fafafa', borderRadius: '8px', padding: '8px 12px' }}>
+                                <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>Suggested</div>
+                                <div style={{ fontSize: '15px', fontWeight: '700', color: '#3B6D11' }}>{row.suggested}</div>
+                              </div>
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                              <div>
+                                <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Order Qty</div>
+                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
+                                  style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Unit</div>
+                                {canSwitch && unitOptions.length > 1 ? (
+                                  <select value={row.orderUnit} onChange={e => updateRecapUnit(dn, ri, e.target.value)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', color: '#000' }}>
+                                    {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                                  </select>
+                                ) : (
+                                  <div style={{ padding: '8px 12px', fontSize: '14px', fontWeight: '500', color: '#555', background: '#fafafa', borderRadius: '8px', border: '1px solid #e8e8e8' }}>{row.orderUnit}</div>
+                                )}
+                              </div>
+                            </div>
+                            <div style={{ marginTop: '8px', fontSize: '13px', fontWeight: '700', color: '#3B6D11', textAlign: 'right' }}>Final: {row.finalQty} {row.orderUnit}</div>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                        <thead>
+                          <tr>{['Product', 'On Hand', 'Par', 'Suggested', 'Order Qty', 'Unit', 'Final'].map((h, i) => (
+                            <th key={i} style={{ textAlign: i > 1 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                          ))}</tr>
+                        </thead>
+                        <tbody>
+                          {recapRows[dn].map((row, ri) => {
+                            const unitOptions = getUnitOptions(row)
+                            const canSwitch = canSwitchUnit(row)
+                            return (
+                              <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
+                                <td style={{ padding: '10px 12px', fontSize: '13px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(1)}</td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
+                                <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
+                                    style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
+                                </td>
+                                <td style={{ padding: '8px 12px', textAlign: 'center' }}>
+                                  {canSwitch && unitOptions.length > 1 ? (
+                                    <select value={row.orderUnit} onChange={e => updateRecapUnit(dn, ri, e.target.value)} style={{ background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px 8px', fontSize: '12px', color: '#000', cursor: 'pointer' }}>
+                                      {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
+                                    </select>
+                                  ) : (
+                                    <span style={{ fontSize: '12px', color: '#555', fontWeight: '500' }}>{row.orderUnit}</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', fontWeight: '600', color: '#3B6D11', fontSize: '13px' }}>
+                                  {row.finalQty} <span style={{ fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.orderUnit}</span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            <div style={{ display: 'grid', gridTemplateColumns: can('submit_order') ? '1fr 1fr' : '1fr', gap: '10px', marginTop: '8px' }}>
+              <button onClick={markAsReady} disabled={saving} style={{ background: '#fff', color: '#3B6D11', border: '2px solid #3B6D11', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
+                {saving ? 'Saving...' : '✓ Mark as Ready'}
+              </button>
+              {can('submit_order') && (
+                <button onClick={submitOrder} disabled={submitting} style={{ background: submitting ? '#ccc' : '#333', color: '#fff', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: submitting ? 'not-allowed' : 'pointer' }}>
+                  {submitting ? 'Submitting...' : '✉️ Submit Order'}
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
 
-## Outstanding / Pinned Items
-
-- [ ] COGS ↔ Inventory full DB unification (see above) — dedicated session needed
-- [ ] Admin permission guards — prevent admins from deactivating each other or the owner account
-- [ ] Dual-purpose accounts (real subscriber + is_admin) always redirect to `/admin` on login — minor friction, not fixed
-- [ ] Rep reply notification UI polish — re-test once a real distributor reply comes through post email-parsing-fix
+export default function OrderPage() {
+  return (
+    <Suspense fallback={
+      <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
+      </div>
+    }>
+      <Order />
+    </Suspense>
+  )
+}
