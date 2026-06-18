@@ -14,6 +14,7 @@ export default function Signup() {
     state: '',
     email: '',
     password: '',
+    smsConsent: false,
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -26,7 +27,8 @@ export default function Signup() {
   )
 
   const handleChange = (e) => {
-    setFormData({ ...formData, [e.target.name]: e.target.value })
+    const { name, value, type, checked } = e.target
+    setFormData({ ...formData, [name]: type === 'checkbox' ? checked : value })
   }
 
   const handleSignup = async (e) => {
@@ -36,6 +38,12 @@ export default function Signup() {
 
     if (formData.password.length < 6) {
       setError('Password must be at least 6 characters.')
+      setLoading(false)
+      return
+    }
+
+    if (!formData.smsConsent) {
+      setError('Please agree to the SMS notification terms to continue.')
       setLoading(false)
       return
     }
@@ -79,7 +87,7 @@ export default function Signup() {
     border: '1px solid #e8e8e8',
     borderRadius: '8px',
     padding: '12px 14px',
-    fontSize: '16px', // prevents iOS auto-zoom
+    fontSize: '16px',
     color: '#000',
     boxSizing: 'border-box'
   }
@@ -135,7 +143,7 @@ export default function Signup() {
 
           <form onSubmit={handleSignup}>
 
-            {/* Name row — stacks on mobile */}
+            {/* Name row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '14px' }}>
               <div>
                 <label style={labelStyle}>First Name</label>
@@ -174,6 +182,28 @@ export default function Signup() {
               <input type="password" name="password" value={formData.password} onChange={handleChange} placeholder="••••••••" required style={inputStyle} />
             </div>
 
+            {/* SMS Consent — required for Twilio 10DLC compliance */}
+            <div style={{ background: '#fafafa', border: `1px solid ${formData.smsConsent ? '#F5B800' : '#e8e8e8'}`, borderRadius: '8px', padding: '12px 14px', marginBottom: '20px', transition: 'border-color .15s' }}>
+              <label style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  name="smsConsent"
+                  checked={formData.smsConsent}
+                  onChange={handleChange}
+                  required
+                  style={{ width: '18px', height: '18px', marginTop: '1px', flexShrink: 0, accentColor: '#F5B800', cursor: 'pointer' }}
+                />
+                <span style={{ fontSize: '12px', color: '#555', lineHeight: 1.6 }}>
+                  I agree to receive transactional SMS notifications from Inventory Sux regarding my orders,
+                  deliveries, and account activity. Message frequency varies. Message and data rates may apply.
+                  Reply <strong>STOP</strong> to opt out at any time, <strong>HELP</strong> for help. See our{' '}
+                  <Link href="/terms" style={{ color: '#F5B800' }}>Terms of Service</Link>
+                  {' '}and{' '}
+                  <Link href="/privacy" style={{ color: '#F5B800' }}>Privacy Policy</Link>.
+                </span>
+              </label>
+            </div>
+
             <button type="submit" disabled={loading}
               style={{ width: '100%', background: loading ? '#ccc' : '#333', color: '#fff', border: 'none', borderRadius: '8px', padding: '14px', fontSize: '15px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer' }}>
               {loading ? 'Creating account...' : 'Start Free Trial'}
@@ -189,12 +219,6 @@ export default function Signup() {
             No charge for 14 days. Card required at next step.
           </p>
 
-          <p style={{ fontSize: '11px', color: '#ccc', textAlign: 'center', marginTop: '8px', lineHeight: '1.6' }}>
-            By creating an account you agree to our{' '}
-            <Link href="/terms" style={{ color: '#aaa', textDecoration: 'underline' }}>Terms of Service</Link>
-            {' '}and{' '}
-            <Link href="/privacy" style={{ color: '#aaa', textDecoration: 'underline' }}>Privacy Policy</Link>.
-          </p>
         </div>
       </div>
     </div>
