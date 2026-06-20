@@ -17,7 +17,7 @@ export default function TermsOfService() {
       <div style={{ maxWidth: '760px', margin: '0 auto', padding: '48px 24px 80px' }}>
 
         <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#000', marginBottom: '8px' }}>Terms of Service</h1>
-        <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '40px' }}>Effective Date: June 2, 2026 · Inventory Sux LLC</p>
+        <p style={{ fontSize: '13px', color: '#aaa', marginBottom: '40px' }}>Effective Date: June 20, 2026 · Inventory Sux LLC</p>
 
         <div style={{ fontSize: '15px', color: '#333', lineHeight: '1.8' }}>
 
@@ -73,49 +73,64 @@ export default function TermsOfService() {
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>8. Intellectual Property</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>8. SMS Notifications to Distributor and Vendor Contacts</h2>
+            <p style={{ marginBottom: '12px' }}>The Service allows you to enable SMS text message notifications to distributor and vendor contacts you add to your account, for the purpose of transmitting order details when you submit an order. <strong>You, and not Inventory Sux LLC, are solely responsible for obtaining and maintaining consent</strong> from any distributor or vendor representative before enabling SMS as an order notification method for that contact.</p>
+            <p style={{ marginBottom: '12px' }}>By enabling SMS for a distributor or vendor contact, you represent and warrant that the individual associated with that phone number has expressly agreed to receive transactional order SMS messages from you through the Service. This consent is typically obtained verbally as part of your existing business relationship with that representative, consistent with our published <a href="/distributor-sms-consent" style={{ color: '#F5B800' }}>SMS Consent Policy</a>.</p>
+            <p style={{ marginBottom: '12px' }}>You agree to:</p>
+            <ul style={{ paddingLeft: '20px', marginBottom: '12px' }}>
+              <li style={{ marginBottom: '6px' }}>Only enable SMS for a contact who has affirmatively communicated, verbally or otherwise, that they wish to receive order notifications by text message</li>
+              <li style={{ marginBottom: '6px' }}>Immediately disable SMS for any contact who withdraws consent, asks to stop receiving messages, or replies STOP</li>
+              <li style={{ marginBottom: '6px' }}>Maintain accurate phone number information for each contact and promptly update or remove it if it changes or is no longer valid</li>
+              <li>Not enable SMS for any contact who has not personally consented, including using SMS to message a phone number obtained from a source other than the contact's direct, knowing communication of their preference</li>
+            </ul>
+            <p style={{ marginBottom: '12px' }}>Inventory Sux relies entirely on your confirmation of consent when you enable this feature and does not independently verify it. <strong>You are solely liable for any claims, penalties, or damages arising from SMS messages sent as a result of your account's configuration</strong>, including but not limited to claims under the Telephone Consumer Protection Act (TCPA) or any similar state or federal law. This obligation is in addition to, and does not limit, your indemnification obligations under Section 12 below.</p>
+            <p>Misrepresenting that consent has been obtained, or knowingly enabling SMS notifications for a contact without their consent, is a material violation of these Terms and may result in immediate suspension or termination of your account.</p>
+          </section>
+
+          <section style={{ marginBottom: '36px' }}>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>9. Intellectual Property</h2>
             <p>The Service, including its design, features, code, trademarks, and content (excluding Your Data), is owned by Inventory Sux LLC and protected by applicable intellectual property laws. These Terms do not grant you any rights to use our trademarks, logos, or other brand features without our prior written consent. All rights not expressly granted in these Terms are reserved by Inventory Sux LLC.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>9. Disclaimer of Warranties</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>10. Disclaimer of Warranties</h2>
             <p>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. INVENTORY SUX LLC DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF HARMFUL COMPONENTS. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>10. Limitation of Liability</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>11. Limitation of Liability</h2>
             <p>TO THE FULLEST EXTENT PERMITTED BY APPLICABLE LAW, INVENTORY SUX LLC AND ITS OFFICERS, DIRECTORS, EMPLOYEES, AND AGENTS SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES, INCLUDING BUT NOT LIMITED TO LOSS OF PROFITS, DATA, OR GOODWILL, ARISING OUT OF OR IN CONNECTION WITH YOUR USE OF THE SERVICE, EVEN IF WE HAVE BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES. OUR TOTAL LIABILITY TO YOU FOR ANY CLAIMS ARISING UNDER THESE TERMS SHALL NOT EXCEED THE AMOUNT YOU PAID TO US IN THE THREE MONTHS PRECEDING THE CLAIM.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>11. Indemnification</h2>
-            <p>You agree to indemnify, defend, and hold harmless Inventory Sux LLC and its officers, directors, employees, and agents from and against any claims, liabilities, damages, losses, and expenses, including reasonable attorneys' fees, arising out of or in any way connected with your access to or use of the Service, your violation of these Terms, or your violation of any rights of another party.</p>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>12. Indemnification</h2>
+            <p>You agree to indemnify, defend, and hold harmless Inventory Sux LLC and its officers, directors, employees, and agents from and against any claims, liabilities, damages, losses, and expenses, including reasonable attorneys' fees, arising out of or in any way connected with your access to or use of the Service, your violation of these Terms (including Section 8 above), or your violation of any rights of another party.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>12. Termination</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>13. Termination</h2>
             <p style={{ marginBottom: '12px' }}>We reserve the right to suspend or terminate your access to the Service at our sole discretion, with or without notice, for conduct that we believe violates these Terms or is harmful to other users, us, third parties, or the integrity of the Service.</p>
             <p>Upon termination, your right to access and use the Service will immediately cease. Provisions of these Terms that by their nature should survive termination shall survive, including but not limited to ownership provisions, warranty disclaimers, indemnity, and limitations of liability.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>13. Modifications to the Service and Terms</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>14. Modifications to the Service and Terms</h2>
             <p>We reserve the right to modify or discontinue the Service, or any part thereof, at any time with or without notice. We may also update these Terms from time to time. Material changes will be communicated via email or a notice within the Service. Your continued use of the Service after such changes constitutes your acceptance of the updated Terms.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>14. Governing Law and Dispute Resolution</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>15. Governing Law and Dispute Resolution</h2>
             <p style={{ marginBottom: '12px' }}>These Terms are governed by and construed in accordance with the laws of the State of Indiana, without regard to its conflict of law principles. Any dispute arising out of or relating to these Terms or the Service shall be resolved exclusively in the state or federal courts located in Indiana, and you consent to personal jurisdiction in such courts.</p>
             <p>Before initiating any formal legal proceeding, you agree to contact us at contact@inventorysux.com and attempt to resolve the dispute informally for at least 30 days.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>15. Entire Agreement</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>16. Entire Agreement</h2>
             <p>These Terms, together with our Privacy Policy, constitute the entire agreement between you and Inventory Sux LLC with respect to the Service and supersede all prior agreements, understandings, and representations. If any provision of these Terms is found to be unenforceable, the remaining provisions will continue in full force and effect.</p>
           </section>
 
           <section>
-            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>16. Contact Us</h2>
+            <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>17. Contact Us</h2>
             <p>If you have any questions about these Terms, please contact us at:</p>
             <div style={{ marginTop: '12px', padding: '16px 20px', background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', fontSize: '14px' }}>
               <strong>Inventory Sux LLC</strong><br />
