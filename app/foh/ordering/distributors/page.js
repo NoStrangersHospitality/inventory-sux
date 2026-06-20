@@ -72,9 +72,8 @@ export default function Distributors() {
     setConsentError(false)
     const { data: { session } } = await supabase.auth.getSession()
 
-    const { sms_consent_confirmed: _smsConsentConfirmed, ...rest } = form
     const payload = {
-      ...rest,
+      ...form,
       user_id: session.user.id,
       sms_consent_confirmed: requiresSmsConsent(form.order_method) ? form.sms_consent_confirmed : false,
     }
