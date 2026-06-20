@@ -23,7 +23,7 @@ export default function TermsOfService() {
 
           <section style={{ marginBottom: '36px' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>1. Acceptance of Terms</h2>
-            <p>These Terms of Service ("Terms") constitute a legally binding agreement between you and Inventory Sux LLC ("Inventory Sux," "we," "our," or "us") governing your access to and use of the Inventory Sux platform, including all related websites, applications, and services (collectively, the "Service"). By accessing or using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.</p>
+            <p>These Terms of Service (&quot;Terms&quot;) constitute a legally binding agreement between you and Inventory Sux LLC (&quot;Inventory Sux,&quot; &quot;we,&quot; &quot;our,&quot; or &quot;us&quot;) governing your access to and use of the Inventory Sux platform, including all related websites, applications, and services (collectively, the &quot;Service&quot;). By accessing or using the Service, you agree to be bound by these Terms. If you do not agree, do not use the Service.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
@@ -63,7 +63,7 @@ export default function TermsOfService() {
 
           <section style={{ marginBottom: '36px' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>6. Your Data</h2>
-            <p style={{ marginBottom: '12px' }}>You retain all ownership rights to the data you input into the Service, including inventory records, distributor information, recipes, and financial data ("Your Data"). By using the Service, you grant Inventory Sux a limited, non-exclusive license to store, process, and transmit Your Data solely as necessary to provide the Service to you.</p>
+            <p style={{ marginBottom: '12px' }}>You retain all ownership rights to the data you input into the Service, including inventory records, distributor information, recipes, and financial data (&quot;Your Data&quot;). By using the Service, you grant Inventory Sux a limited, non-exclusive license to store, process, and transmit Your Data solely as necessary to provide the Service to you.</p>
             <p>We do not claim ownership of Your Data and will not use it for any purpose other than operating and improving the Service. Upon account termination, you may export Your Data using the available export tools. We will delete Your Data within 30 days of account closure.</p>
           </section>
 
@@ -81,9 +81,9 @@ export default function TermsOfService() {
               <li style={{ marginBottom: '6px' }}>Only enable SMS for a contact who has affirmatively communicated, verbally or otherwise, that they wish to receive order notifications by text message</li>
               <li style={{ marginBottom: '6px' }}>Immediately disable SMS for any contact who withdraws consent, asks to stop receiving messages, or replies STOP</li>
               <li style={{ marginBottom: '6px' }}>Maintain accurate phone number information for each contact and promptly update or remove it if it changes or is no longer valid</li>
-              <li>Not enable SMS for any contact who has not personally consented, including using SMS to message a phone number obtained from a source other than the contact's direct, knowing communication of their preference</li>
+              <li>Not enable SMS for any contact who has not personally consented, including using SMS to message a phone number obtained from a source other than the contact&apos;s direct, knowing communication of their preference</li>
             </ul>
-            <p style={{ marginBottom: '12px' }}>Inventory Sux relies entirely on your confirmation of consent when you enable this feature and does not independently verify it. <strong>You are solely liable for any claims, penalties, or damages arising from SMS messages sent as a result of your account's configuration</strong>, including but not limited to claims under the Telephone Consumer Protection Act (TCPA) or any similar state or federal law. This obligation is in addition to, and does not limit, your indemnification obligations under Section 12 below.</p>
+            <p style={{ marginBottom: '12px' }}>Inventory Sux relies entirely on your confirmation of consent when you enable this feature and does not independently verify it. <strong>You are solely liable for any claims, penalties, or damages arising from SMS messages sent as a result of your account&apos;s configuration</strong>, including but not limited to claims under the Telephone Consumer Protection Act (TCPA) or any similar state or federal law. This obligation is in addition to, and does not limit, your indemnification obligations under Section 12 below.</p>
             <p>Misrepresenting that consent has been obtained, or knowingly enabling SMS notifications for a contact without their consent, is a material violation of these Terms and may result in immediate suspension or termination of your account.</p>
           </section>
 
@@ -94,7 +94,7 @@ export default function TermsOfService() {
 
           <section style={{ marginBottom: '36px' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>10. Disclaimer of Warranties</h2>
-            <p>THE SERVICE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. INVENTORY SUX LLC DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF HARMFUL COMPONENTS. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
+            <p>THE SERVICE IS PROVIDED &quot;AS IS&quot; AND &quot;AS AVAILABLE&quot; WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. INVENTORY SUX LLC DOES NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, ERROR-FREE, OR FREE OF HARMFUL COMPONENTS. YOU USE THE SERVICE AT YOUR OWN RISK.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>
@@ -104,7 +104,7 @@ export default function TermsOfService() {
 
           <section style={{ marginBottom: '36px' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '700', color: '#000', marginBottom: '12px' }}>12. Indemnification</h2>
-            <p>You agree to indemnify, defend, and hold harmless Inventory Sux LLC and its officers, directors, employees, and agents from and against any claims, liabilities, damages, losses, and expenses, including reasonable attorneys' fees, arising out of or in any way connected with your access to or use of the Service, your violation of these Terms (including Section 8 above), or your violation of any rights of another party.</p>
+            <p>You agree to indemnify, defend, and hold harmless Inventory Sux LLC and its officers, directors, employees, and agents from and against any claims, liabilities, damages, losses, and expenses, including reasonable attorneys&apos; fees, arising out of or in any way connected with your access to or use of the Service, your violation of these Terms (including Section 8 above), or your violation of any rights of another party.</p>
           </section>
 
           <section style={{ marginBottom: '36px' }}>

@@ -36,6 +36,7 @@ export default function Distributors() {
       setLoading(false)
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const requiresSmsConsent = (method) => method === 'sms' || method === 'both'
@@ -71,7 +72,7 @@ export default function Distributors() {
     setConsentError(false)
     const { data: { session } } = await supabase.auth.getSession()
 
-    const { sms_consent_confirmed, ...rest } = form
+    const { sms_consent_confirmed: _smsConsentConfirmed, ...rest } = form
     const payload = {
       ...rest,
       user_id: session.user.id,
