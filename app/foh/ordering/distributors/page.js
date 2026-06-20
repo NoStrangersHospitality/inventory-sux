@@ -11,7 +11,8 @@ export default function Distributors() {
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
   const [isMobile, setIsMobile] = useState(false)
-  const [form, setForm] = useState({ name: '', contact_name: '', email: '', phone: '', order_method: '', minimum_order: '', notes: '' })
+  const [form, setForm] = useState({ name: '', contact_name: '', email: '', phone: '', order_method: '', minimum_order: '', notes: '', sms_consent_confirmed: false })
+  const [consentError, setConsentError] = useState(false)
   const router = useRouter()
 
   const supabase = createBrowserClient(
@@ -37,22 +38,61 @@ export default function Distributors() {
     init()
   }, [])
 
+  const requiresSmsConsent = (method) => method === 'sms' || method === 'both'
+
   const openForm = (dist = null) => {
     if (dist) {
-      setForm({ name: dist.name, contact_name: dist.contact_name || '', email: dist.email || '', phone: dist.phone || '', order_method: dist.order_method || '', minimum_order: dist.minimum_order || '', notes: dist.notes || '' })
+      setForm({
+        name: dist.name, contact_name: dist.contact_name || '', email: dist.email || '',
+        phone: dist.phone || '', order_method: dist.order_method || '', minimum_order: dist.minimum_order || '',
+        notes: dist.notes || '', sms_consent_confirmed: dist.sms_consent_confirmed || false,
+      })
       setEditingId(dist.id)
     } else {
-      setForm({ name: '', contact_name: '', email: '', phone: '', order_method: '', minimum_order: '', notes: '' })
+      setForm({ name: '', contact_name: '', email: '', phone: '', order_method: '', minimum_order: '', notes: '', sms_consent_confirmed: false })
       setEditingId(null)
     }
+    setConsentError(false)
     setShowForm(true)
+  }
+
+  const handleOrderMethodChange = (val) => {
+    setForm(f => ({ ...f, order_method: val, sms_consent_confirmed: requiresSmsConsent(val) ? f.sms_consent_confirmed : false }))
+    setConsentError(false)
   }
 
   const saveDist = async () => {
     if (!form.name) return
+    if (requiresSmsConsent(form.order_method) && !form.sms_consent_confirmed) {
+      setConsentError(true)
+      return
+    }
     setSaving(true)
+    setConsentError(false)
     const { data: { session } } = await supabase.auth.getSession()
-    const payload = { ...form, user_id: session.user.id }
+
+    const { sms_consent_confirmed, ...rest } = form
+    const payload = {
+      ...rest,
+      user_id: session.user.id,
+      sms_consent_confirmed: requiresSmsConsent(form.order_method) ? form.sms_consent_confirmed : false,
+    }
+
+    // Only stamp confirmation metadata the moment consent is newly given —
+    // don't overwrite an existing timestamp on every unrelated edit.
+    const existing = editingId ? distributors.find(d => d.id === editingId) : null
+    const isNewConsent = requiresSmsConsent(form.order_method) && form.sms_consent_confirmed && !existing?.sms_consent_confirmed
+    if (isNewConsent) {
+      payload.sms_consent_confirmed_at = new Date().toISOString()
+      payload.sms_consent_confirmed_by = session.user.id
+    }
+    // If order method is changed away from sms/both, clear the consent record
+    // so re-enabling SMS later requires re-confirmation.
+    if (!requiresSmsConsent(form.order_method)) {
+      payload.sms_consent_confirmed_at = null
+      payload.sms_consent_confirmed_by = null
+    }
+
     if (editingId) {
       await supabase.from('distributors').update(payload).eq('id', editingId)
     } else {
@@ -72,6 +112,8 @@ export default function Distributors() {
       <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
     </div>
   )
+
+  const smsRequired = requiresSmsConsent(form.order_method)
 
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
@@ -107,7 +149,7 @@ export default function Distributors() {
               </div>
               <div>
                 <label style={labelStyle}>Order Method</label>
-                <select style={inputStyle} value={form.order_method} onChange={e => setForm(f => ({ ...f, order_method: e.target.value }))}>
+                <select style={inputStyle} value={form.order_method} onChange={e => handleOrderMethodChange(e.target.value)}>
                   <option value="">-- Select --</option>
                   <option value="email">Email</option>
                   <option value="sms">SMS / Text</option>
@@ -133,6 +175,33 @@ export default function Distributors() {
                 <input style={inputStyle} placeholder="Delivery days, cutoff times..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
               </div>
             </div>
+
+            {/* SMS consent confirmation — required whenever order_method is sms or both */}
+            {smsRequired && (
+              <div style={{ background: consentError ? '#fff5f5' : '#fafafa', border: `1px solid ${consentError ? '#E24B4A' : (form.sms_consent_confirmed ? '#F5B800' : '#e8e8e8')}`, borderRadius: '8px', padding: '12px 14px', marginBottom: '14px', transition: 'border-color .15s' }}>
+                <label style={{ display: 'flex', gap: '12px', alignItems: 'flex-start', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.sms_consent_confirmed}
+                    onChange={e => { setForm(f => ({ ...f, sms_consent_confirmed: e.target.checked })); setConsentError(false) }}
+                    style={{ width: '18px', height: '18px', marginTop: '1px', flexShrink: 0, accentColor: '#F5B800', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: '12px', color: consentError ? '#c53030' : '#555', lineHeight: 1.6 }}>
+                    I confirm that {form.contact_name || 'this distributor representative'} has agreed to receive
+                    transactional order SMS messages from {form.name || 'this distributor'} at the phone number provided.
+                    I am responsible for maintaining this consent and will disable SMS for this contact if they
+                    withdraw it. See our{' '}
+                    <a href="/distributor-sms-consent" target="_blank" rel="noopener noreferrer" style={{ color: '#F5B800' }}>SMS Consent Policy</a>.
+                  </span>
+                </label>
+                {consentError && (
+                  <div style={{ fontSize: '11px', color: '#c53030', marginTop: '8px', paddingLeft: '30px' }}>
+                    Please confirm SMS consent before saving this order method.
+                  </div>
+                )}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: '10px' }}>
               <button onClick={() => setShowForm(false)} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
               <button onClick={saveDist} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>
@@ -156,6 +225,7 @@ export default function Distributors() {
                     <div style={{ fontSize: '12px', color: '#aaa' }}>
                       {d.contact_name && `${d.contact_name}`}
                       {d.order_method && ` · ${d.order_method}`}
+                      {requiresSmsConsent(d.order_method) && (d.sms_consent_confirmed ? ' · ✓ SMS consent' : ' · ⚠ SMS consent missing')}
                     </div>
                   </div>
                   <button onClick={() => openForm(d)} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>Edit</button>
@@ -188,6 +258,11 @@ export default function Distributors() {
                     <td style={{ padding: '12px 14px' }}>
                       {d.order_method && (
                         <span style={{ background: '#fffbe6', color: '#a07800', border: '1px solid #f0d060', borderRadius: '10px', fontSize: '11px', padding: '2px 8px' }}>{d.order_method}</span>
+                      )}
+                      {requiresSmsConsent(d.order_method) && (
+                        d.sms_consent_confirmed
+                          ? <span style={{ marginLeft: '6px', fontSize: '11px', color: '#3B6D11' }} title="SMS consent confirmed">✓</span>
+                          : <span style={{ marginLeft: '6px', fontSize: '11px', color: '#E24B4A' }} title="SMS consent not confirmed">⚠</span>
                       )}
                     </td>
                     <td style={{ padding: '12px 14px', color: '#888', fontSize: '12px' }}>{d.minimum_order || '--'}</td>
