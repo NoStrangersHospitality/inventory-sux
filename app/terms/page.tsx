@@ -1,15 +1,17 @@
+import Link from 'next/link'
+
 export default function TermsOfService() {
   return (
     <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
 
       {/* Topbar */}
       <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <a href="/" style={{ textDecoration: 'none' }}>
+        <Link href="/" style={{ textDecoration: 'none' }}>
           <div style={{ fontSize: '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px' }}>
             <span style={{ color: '#000' }}>Inventory</span>
             <span style={{ color: '#F5B800' }}>Sux</span>
           </div>
-        </a>
+        </Link>
         <a href="/auth/login" style={{ fontSize: '13px', color: '#555', textDecoration: 'none' }}>Back to App</a>
       </div>
 

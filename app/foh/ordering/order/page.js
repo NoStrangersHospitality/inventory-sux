@@ -146,9 +146,19 @@ function Order() {
                 orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
               }))
             })
-            setOrderRows(byDist)
-            setRecapRows(rd)
-            setStep('recap')
+            // Guard: if every item is now at/above par, rd ends up empty.
+            // Don't land on a blank recap screen — bounce back to the hub instead.
+            // (Previously this would set step('recap') with an empty recapRows,
+            // and hitting Mark as Ready / Submit Order from there would wipe
+            // the existing order_lines down to 0.)
+            if (Object.keys(rd).length === 0) {
+              alert('All items on this order are now at or above par — nothing left to order.')
+              router.push('/foh/ordering')
+            } else {
+              setOrderRows(byDist)
+              setRecapRows(rd)
+              setStep('recap')
+            }
           }
         }
       }
@@ -296,6 +306,13 @@ function Order() {
   }
 
   const markAsReady = async () => {
+    // Guard: never delete existing order_lines and replace them with
+    // an empty set. If recapRows is empty there's nothing to write,
+    // and proceeding would wipe out a previously-saved order.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to mark as ready.')
+      return
+    }
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
@@ -317,7 +334,7 @@ function Order() {
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           distributor_id: row.distributor_id || null, distributor_name: dn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty,
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null,
         })
       })
     })
@@ -328,6 +345,11 @@ function Order() {
   }
 
   const submitOrder = async () => {
+    // Same guard as markAsReady — don't wipe order_lines with an empty insert.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to submit.')
+      return
+    }
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
@@ -355,7 +377,7 @@ function Order() {
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           distributor_id: row.distributor_id || null, distributor_name: dn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null
         })
       })
     })
