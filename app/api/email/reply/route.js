@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 export async function POST(request) {
   try {
     const formData = await request.formData()
-    
+
     const from = formData.get('from') || formData.get('From') || ''
     const subject = formData.get('subject') || formData.get('Subject') || ''
     const text = formData.get('text') || formData.get('Text') || ''
@@ -17,13 +17,11 @@ export async function POST(request) {
       return Response.json({ error: 'No sender email found' }, { status: 400 })
     }
 
-    let messageBody = text || html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    // Use plain text body, fall back to stripped HTML
+    let rawBody = text || html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 
-    messageBody = messageBody
-      .split('\n')
-      .filter(line => !line.startsWith('>') && !line.match(/^On .* wrote:/))
-      .join('\n')
-      .trim()
+    // Extract just the reply — everything before the quoted thread starts
+    const messageBody = extractReply(rawBody)
 
     if (!messageBody) {
       return Response.json({ error: 'No message body found' }, { status: 400 })
@@ -35,12 +33,11 @@ export async function POST(request) {
     )
 
     const orderIdMatch = subject.match(/\[#([A-Z0-9]{8})\]/)
-    
+
     let orderId, userId, distName
 
     if (orderIdMatch) {
       const orderPrefix = orderIdMatch[1].toLowerCase()
-
       const { data: orders } = await supabase
         .rpc('find_order_by_prefix', { prefix: orderPrefix })
 
@@ -104,4 +101,51 @@ export async function POST(request) {
     console.error('Email reply webhook error:', error)
     return Response.json({ error: error.message }, { status: 500 })
   }
+}
+
+function extractReply(body) {
+  if (!body) return ''
+
+  const lines = body.split('\n')
+  const cutPatterns = [
+    // Standard quoted reply headers
+    /^From:\s+/i,
+    /^-{3,}\s*Original Message\s*-{3,}/i,
+    /^-{3,}\s*Forwarded Message\s*-{3,}/i,
+    /^On .+ wrote:$/i,
+    /^_{3,}/,
+    // Outlook-style
+    /^Sent:\s+/i,
+    // Inventory Sux order block — the order we sent is quoted back
+    /^Inventory Sux New Order/i,
+    /^Submitted by/i,
+    /^Order #[A-Z0-9]/i,
+    // Security warning banners (corporate IT)
+    /^\[?\s*EXTERNAL\s*\]?/i,
+    /^CAUTION:/i,
+    /^WARNING:/i,
+  ]
+
+  let cutAt = lines.length
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (cutPatterns.some(p => p.test(line))) {
+      cutAt = i
+      break
+    }
+    // Also cut at Gmail-style > quoted lines
+    if (line.startsWith('>')) {
+      cutAt = i
+      break
+    }
+  }
+
+  const reply = lines
+    .slice(0, cutAt)
+    .map(l => l.trim())
+    .filter(l => l.length > 0)
+    .join('\n')
+    .trim()
+
+  return reply || ''
 }
