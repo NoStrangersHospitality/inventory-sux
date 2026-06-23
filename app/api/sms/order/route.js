@@ -9,7 +9,6 @@ export async function POST(request) {
   try {
     const {
       distributorPhone,
-      distributorName,
       barName,
       managerName,
       orderLines,

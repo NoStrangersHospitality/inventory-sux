@@ -166,12 +166,13 @@ function Order() {
       setLoading(false)
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerId, searchParams])
 
   const toggleCat = (cat) => {
     setSelectedCats(prev => {
       const next = new Set(prev)
-      next.has(cat) ? next.delete(cat) : next.add(cat)
+      if (next.has(cat)) { next.delete(cat) } else { next.add(cat) }
       return next
     })
   }
@@ -394,7 +395,7 @@ function Order() {
     const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
     const { data: distContacts } = await supabase.from('distributors').select('id, name, email, phone, order_method').in('id', distIds)
 
-    for (const [distName, group] of Object.entries(distributorGroups)) {
+    for (const [, group] of Object.entries(distributorGroups)) {
       const contact = distContacts?.find(d => d.id === group.id)
       if (!contact) continue
       const orderLines = group.lines.filter(l => l.final_qty > 0)

@@ -163,7 +163,7 @@ function BOHOrder() {
   const toggleCat = (cat) => {
     setSelectedCats(prev => {
       const next = new Set(prev)
-      next.has(cat) ? next.delete(cat) : next.add(cat)
+      if (next.has(cat)) { next.delete(cat) } else { next.add(cat) }
       return next
     })
   }
@@ -382,7 +382,7 @@ function BOHOrder() {
     const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
     const { data: distContacts } = await supabase.from('vendors').select('id, name, email, phone, order_method').in('id', distIds)
 
-    for (const [vendorName, group] of Object.entries(vendorGroups)) {
+    for (const [, group] of Object.entries(vendorGroups)) {
       const contact = distContacts?.find(d => d.id === group.id)
       if (!contact) continue
       const orderLines = group.lines.filter(l => l.final_qty > 0)
