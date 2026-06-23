@@ -140,9 +140,16 @@ function BOHOrder() {
               const needed = byVendor[vn].filter(r => r.suggested > 0)
               if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
             })
-            setOrderRows(byVendor)
-            setRecapRows(rd)
-            setStep('recap')
+            // Guard: if all items are at/above par, rd is empty — bounce back
+            // rather than landing on a blank recap that would wipe order_lines on submit.
+            if (Object.keys(rd).length === 0) {
+              alert('All items on this order are now at or above par — nothing left to order.')
+              router.push('/boh/ordering')
+            } else {
+              setOrderRows(byVendor)
+              setRecapRows(rd)
+              setStep('recap')
+            }
           }
         }
       }
@@ -150,6 +157,7 @@ function BOHOrder() {
       setLoading(false)
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerId, searchParams])
 
   const toggleCat = (cat) => {
@@ -288,6 +296,11 @@ function BOHOrder() {
   }
 
   const markAsReady = async () => {
+    // Guard: never delete existing order_lines and replace with empty set.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to mark as ready.')
+      return
+    }
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
@@ -309,7 +322,7 @@ function BOHOrder() {
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty,
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null,
         })
       })
     })
@@ -320,6 +333,11 @@ function BOHOrder() {
   }
 
   const submitOrder = async () => {
+    // Guard: never delete existing order_lines and replace with empty set.
+    if (Object.keys(recapRows).length === 0) {
+      alert('No items to order — nothing to submit.')
+      return
+    }
     setSubmitting(true)
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
@@ -347,7 +365,7 @@ function BOHOrder() {
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty,
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null,
         })
       })
     })
@@ -372,7 +390,8 @@ function BOHOrder() {
       if (contact.email && (contact.order_method?.toLowerCase() === 'email' || contact.order_method?.toLowerCase() === 'both')) {
         try { await fetch('/api/email/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order email failed for', contact.name, err) }
       }
-      if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
+      // BOH vendors use 'Text' (capitalized) as the SMS order method value
+      if (contact.phone && (contact.order_method === 'Text' || contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
         try { await fetch('/api/sms/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order SMS failed for', contact.name, err) }
       }
     }
