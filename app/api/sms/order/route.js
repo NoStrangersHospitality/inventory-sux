@@ -41,7 +41,10 @@ Reply to this message to confirm or ask questions.`
 
     await client.messages.create({
       body: message,
-      from: process.env.TWILIO_PHONE_NUMBER,
+      // Use Messaging Service SID (not direct phone number) so messages are
+      // sent under the verified A2P 10DLC campaign. Sending from a raw phone
+      // number bypasses the campaign registration and risks carrier filtering.
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
       to: formattedPhone,
     })
 
