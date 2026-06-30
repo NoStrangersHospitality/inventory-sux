@@ -19,6 +19,8 @@ function Order() {
   const [draftOrder, setDraftOrder] = useState(null)
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
+  // Map of item_id -> array of { qty, date } for the last 4 submitted orders that included it, most recent first
+  const [orderHistory, setOrderHistory] = useState({})
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can, ownerId } = useRole()
@@ -62,6 +64,18 @@ function Order() {
     return [item.unit || 'bottle']
   }
 
+  // Returns up to the last 4 ordered quantities for an item, most recent first.
+  // Each entry is { qty, date }. Empty array if the item has never been ordered.
+  const getItemHistory = (itemId) => orderHistory[itemId] || []
+
+  // Average of available history entries (could be fewer than 4 for newer items).
+  // Returns null if there's no history at all, so callers can render '--' instead of '0'.
+  const getItemHistoryAvg = (itemId) => {
+    const hist = getItemHistory(itemId)
+    if (!hist.length) return null
+    return hist.reduce((sum, h) => sum + (h.qty || 0), 0) / hist.length
+  }
+
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
     check()
@@ -88,6 +102,44 @@ function Order() {
       const fetchedDists = distData || []
       setItems(fetchedItems)
       setDistributors(fetchedDists)
+
+      // Build 4-week order history per item from the last several submitted FOH orders.
+      // Pull recent submitted orders (capped at 12 to bound the query, since not every
+      // order will touch every item) and walk newest-to-oldest, keeping the first 4
+      // distinct order dates that included each item.
+      const { data: recentOrders } = await supabase
+        .from('orders')
+        .select('id, submitted_at')
+        .eq('user_id', ownerIdToUse)
+        .eq('area', 'foh')
+        .eq('status', 'submitted')
+        .order('submitted_at', { ascending: false })
+        .limit(12)
+
+      if (recentOrders && recentOrders.length > 0) {
+        const orderIds = recentOrders.map(o => o.id)
+        const { data: historyLines } = await supabase
+          .from('order_lines')
+          .select('item_id, final_qty, order_id')
+          .in('order_id', orderIds)
+
+        const orderDateById = {}
+        recentOrders.forEach(o => { orderDateById[o.id] = o.submitted_at })
+
+        const history = {}
+        ;(historyLines || []).forEach(line => {
+          if (!line.item_id) return
+          if (!history[line.item_id]) history[line.item_id] = []
+          history[line.item_id].push({ qty: line.final_qty, date: orderDateById[line.order_id], orderId: line.order_id })
+        })
+        // Sort each item's entries newest-first and cap at 4
+        Object.keys(history).forEach(itemId => {
+          history[itemId] = history[itemId]
+            .sort((a, b) => new Date(b.date) - new Date(a.date))
+            .slice(0, 4)
+        })
+        setOrderHistory(history)
+      }
 
       const buildByDistFromItems = () => {
         const byDist = {}
@@ -500,10 +552,20 @@ function Order() {
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      orderRows[dn].map((row, ri) => (
+                      orderRows[dn].map((row, ri) => {
+                        const hist = getItemHistory(row.id)
+                        const avg = getItemHistoryAvg(row.id)
+                        return (
                         <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
-                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '4px' }}>
                             {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '8px' }}>
+                            {hist.length > 0 ? (
+                              <>Last 4: {hist.map(h => h.qty).join(' · ')} <span style={{ color: '#888', fontWeight: '600' }}>(avg {avg.toFixed(1)})</span></>
+                            ) : (
+                              <span style={{ color: '#ccc' }}>No order history yet</span>
+                            )}
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
@@ -522,20 +584,29 @@ function Order() {
                             </div>
                           </div>
                         </div>
-                      ))
+                      )})
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr>{['Product', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
+                          <tr>{['Product', 'Category', 'Unit', 'Last 4 Orders', 'Avg', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}</tr>
                         </thead>
                         <tbody>
-                          {orderRows[dn].map((row, ri) => (
+                          {orderRows[dn].map((row, ri) => {
+                            const hist = getItemHistory(row.id)
+                            const avg = getItemHistoryAvg(row.id)
+                            return (
                             <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
                               <td style={{ padding: '8px 10px', fontSize: '12px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: '11px', color: '#888' }}>
+                                {hist.length > 0 ? hist.map(h => h.qty).join(' · ') : <span style={{ color: '#ccc' }}>--</span>}
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: avg !== null ? '#555' : '#ccc' }}>
+                                {avg !== null ? avg.toFixed(1) : '--'}
+                              </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                                 <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
                                   style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
@@ -546,7 +617,7 @@ function Order() {
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                             </tr>
-                          ))}
+                          )})}
                         </tbody>
                       </table>
                     )}
