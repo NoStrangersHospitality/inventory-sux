@@ -103,10 +103,12 @@ function Order() {
       setItems(fetchedItems)
       setDistributors(fetchedDists)
 
-      // Build 4-week order history per item from the last several submitted FOH orders.
-      // Pull recent submitted orders (capped at 12 to bound the query, since not every
-      // order will touch every item) and walk newest-to-oldest, keeping the first 4
-      // distinct order dates that included each item.
+      // Build 4-week order history per item from the last 4 submitted FOH orders.
+      // Unlike before, this now uses a FIXED set of the last 4 order dates as the
+      // reference frame — if an item wasn't on a given order's line items, that's
+      // recorded as an explicit 0 (it genuinely wasn't ordered that week), not
+      // treated as missing data. This makes "ordered 0 every week" visible, which
+      // is exactly the signal for "this par may be too high."
       const { data: recentOrders } = await supabase
         .from('orders')
         .select('id, submitted_at')
@@ -114,7 +116,7 @@ function Order() {
         .eq('area', 'foh')
         .eq('status', 'submitted')
         .order('submitted_at', { ascending: false })
-        .limit(12)
+        .limit(4)
 
       if (recentOrders && recentOrders.length > 0) {
         const orderIds = recentOrders.map(o => o.id)
@@ -123,20 +125,25 @@ function Order() {
           .select('item_id, final_qty, order_id')
           .in('order_id', orderIds)
 
-        const orderDateById = {}
-        recentOrders.forEach(o => { orderDateById[o.id] = o.submitted_at })
-
-        const history = {}
+        // qtyByItemAndOrder[itemId][orderId] = final_qty actually ordered
+        const qtyByItemAndOrder = {}
         ;(historyLines || []).forEach(line => {
           if (!line.item_id) return
-          if (!history[line.item_id]) history[line.item_id] = []
-          history[line.item_id].push({ qty: line.final_qty, date: orderDateById[line.order_id], orderId: line.order_id })
+          if (!qtyByItemAndOrder[line.item_id]) qtyByItemAndOrder[line.item_id] = {}
+          qtyByItemAndOrder[line.item_id][line.order_id] = line.final_qty
         })
-        // Sort each item's entries newest-first and cap at 4
-        Object.keys(history).forEach(itemId => {
-          history[itemId] = history[itemId]
-            .sort((a, b) => new Date(b.date) - new Date(a.date))
-            .slice(0, 4)
+
+        // For every item that appeared on ANY of the last 4 orders, build a full
+        // 4-entry history against the fixed recentOrders frame — filling 0 for
+        // any order where that item had no line.
+        const history = {}
+        const itemIdsWithAnyHistory = new Set(Object.keys(qtyByItemAndOrder))
+        itemIdsWithAnyHistory.forEach(itemId => {
+          history[itemId] = recentOrders.map(o => ({
+            qty: qtyByItemAndOrder[itemId]?.[o.id] ?? 0,
+            date: o.submitted_at,
+            orderId: o.id,
+          }))
         })
         setOrderHistory(history)
       }
