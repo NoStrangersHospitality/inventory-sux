@@ -142,7 +142,7 @@ export default function Dashboard() {
 
           {/* Notification bell */}
           <div style={{ position: 'relative' }}>
-            <button onClick={() => { setNotifOpen(o => !o); setMenuOpen(false); if (!notifOpen) markAllRead() }}
+            <button onClick={() => { setNotifOpen(o => !o); setMenuOpen(false) }}
               style={{ background: 'none', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '6px 10px', cursor: 'pointer', position: 'relative', fontSize: '16px' }}>
               🔔
               {unreadCount > 0 && (
@@ -183,6 +183,12 @@ export default function Dashboard() {
                       <div style={{ fontSize: '10px', color: '#aaa', marginTop: '4px', textTransform: 'uppercase', letterSpacing: '0.4px' }}>via {reply.channel || 'sms'}</div>
                     </div>
                   ))}
+                </div>
+                <div onClick={() => { setNotifOpen(false); router.push('/notifications') }}
+                  style={{ padding: '12px 16px', textAlign: 'center', fontSize: '12px', color: '#F5B800', fontWeight: '600', cursor: 'pointer', borderTop: '1px solid #f0f0f0', background: '#fafafa' }}
+                  onMouseEnter={e => e.currentTarget.style.background = '#f5f5f3'}
+                  onMouseLeave={e => e.currentTarget.style.background = '#fafafa'}>
+                  View all notifications →
                 </div>
               </div>
             )}
