@@ -24,6 +24,15 @@ export default function Notifications() {
     return () => window.removeEventListener('resize', check)
   }, [])
 
+  const loadReplies = async (userId) => {
+    const { data } = await supabase
+      .from('order_replies')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+    setReplies(data || [])
+  }
+
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -34,15 +43,6 @@ export default function Notifications() {
     init()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-
-  const loadReplies = async (userId) => {
-    const { data } = await supabase
-      .from('order_replies')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-    setReplies(data || [])
-  }
 
   const markRead = async (id) => {
     await supabase.from('order_replies').update({ read: true }).eq('id', id)
