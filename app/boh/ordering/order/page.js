@@ -19,6 +19,7 @@ function BOHOrder() {
   const [draftOrder, setDraftOrder] = useState(null)
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
+  const [orderHistory, setOrderHistory] = useState({})
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can, ownerId } = useRole()
@@ -56,6 +57,14 @@ function BOHOrder() {
     return [base, 'case']
   }
 
+  const getItemHistory = (itemId) => orderHistory[itemId] || []
+
+  const getItemHistoryAvg = (itemId) => {
+    const hist = getItemHistory(itemId)
+    if (!hist.length) return null
+    return hist.reduce((sum, h) => sum + (h.qty || 0), 0) / hist.length
+  }
+
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
     check()
@@ -85,6 +94,44 @@ function BOHOrder() {
       const fetchedVendors = vendorData || []
       setItems(fetchedItems)
       setVendors(fetchedVendors)
+
+      // Build 4-week order history per item from the last 4 submitted BOH orders.
+      // Uses a fixed set of the last 4 order dates as the reference frame —
+      // items not on a given order are recorded as explicit 0s.
+      const { data: recentOrders } = await supabase
+        .from('orders')
+        .select('id, submitted_at')
+        .eq('user_id', ownerIdToUse)
+        .eq('area', 'boh')
+        .eq('status', 'submitted')
+        .order('submitted_at', { ascending: false })
+        .limit(4)
+
+      if (recentOrders && recentOrders.length > 0) {
+        const orderIds = recentOrders.map(o => o.id)
+        const { data: historyLines } = await supabase
+          .from('order_lines')
+          .select('item_id, final_qty, order_id')
+          .in('order_id', orderIds)
+
+        const qtyByItemAndOrder = {}
+        ;(historyLines || []).forEach(line => {
+          if (!line.item_id) return
+          if (!qtyByItemAndOrder[line.item_id]) qtyByItemAndOrder[line.item_id] = {}
+          qtyByItemAndOrder[line.item_id][line.order_id] = line.final_qty
+        })
+
+        const history = {}
+        const itemIdsWithAnyHistory = new Set(Object.keys(qtyByItemAndOrder))
+        itemIdsWithAnyHistory.forEach(itemId => {
+          history[itemId] = recentOrders.map(o => ({
+            qty: qtyByItemAndOrder[itemId]?.[o.id] ?? 0,
+            date: o.submitted_at,
+            orderId: o.id,
+          }))
+        })
+        setOrderHistory(history)
+      }
 
       const buildByVendorFromLines = (lineData) => {
         const byVendor = {}
@@ -488,10 +535,20 @@ function BOHOrder() {
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      orderRows[vn].map((row, ri) => (
+                      orderRows[vn].map((row, ri) => {
+                        const hist = getItemHistory(row.id)
+                        const avg = getItemHistoryAvg(row.id)
+                        return (
                         <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
-                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '4px' }}>
                             {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
+                          </div>
+                          <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '8px' }}>
+                            {hist.length > 0 ? (
+                              <>Last 4: {hist.map(h => h.qty).join(' · ')} <span style={{ color: '#888', fontWeight: '600' }}>(avg {avg.toFixed(1)})</span></>
+                            ) : (
+                              <span style={{ color: '#ccc' }}>No order history yet</span>
+                            )}
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
@@ -510,20 +567,29 @@ function BOHOrder() {
                             </div>
                           </div>
                         </div>
-                      ))
+                      )})
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr>{['Item', 'Category', 'Unit', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
+                          <tr>{['Item', 'Category', 'Unit', 'Last 4 Orders', 'Avg', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
                             <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}</tr>
                         </thead>
                         <tbody>
-                          {orderRows[vn].map((row, ri) => (
+                          {orderRows[vn].map((row, ri) => {
+                            const hist = getItemHistory(row.id)
+                            const avg = getItemHistoryAvg(row.id)
+                            return (
                             <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
                               <td style={{ padding: '8px 10px', fontSize: '12px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.catLabel}</td>
                               <td style={{ padding: '8px 10px', fontSize: '11px', color: '#888' }}>{row.unit || '--'}</td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: '11px', color: '#888' }}>
+                                {hist.length > 0 ? hist.map(h => h.qty).join(' · ') : <span style={{ color: '#ccc' }}>--</span>}
+                              </td>
+                              <td style={{ padding: '8px 10px', textAlign: 'center', fontSize: '12px', fontWeight: '600', color: avg !== null ? '#555' : '#ccc' }}>
+                                {avg !== null ? avg.toFixed(1) : '--'}
+                              </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
                                 <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                   style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
@@ -534,7 +600,7 @@ function BOHOrder() {
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                             </tr>
-                          ))}
+                          )})}
                         </tbody>
                       </table>
                     )}
