@@ -50,7 +50,8 @@ function BOHOrder() {
   ]
 
   const ITEM_TYPES = ['weight', 'volume', 'unit', 'case']
-  const UNITS = {
+
+  const UNITS_BY_TYPE = {
     weight: ['lb', 'oz', 'kg', 'g'],
     volume: ['gal', 'qt', 'pt', 'fl oz', 'L', 'ml'],
     unit: ['each', 'dozen', 'bunch', 'head'],
@@ -68,8 +69,9 @@ function BOHOrder() {
   }
 
   const getUnitOptions = (item) => {
+    const base = item.unit || 'unit'
     if (item.item_type === 'case') return ['case']
-    return [item.unit || 'unit', 'case']
+    return [base, 'case']
   }
 
   const getItemHistory = (itemId) => orderHistory[itemId] || []
@@ -96,10 +98,10 @@ function BOHOrder() {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
 
+      const ownerIdToUse = ownerId || session.user.id
+
       const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
       if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
-
-      const ownerIdToUse = ownerId || session.user.id
 
       const [{ data: itemData }, { data: vendorData }] = await Promise.all([
         supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').eq('on_menu', true).order('name'),
@@ -110,6 +112,9 @@ function BOHOrder() {
       setItems(fetchedItems)
       setVendors(fetchedVendors)
 
+      // Build 4-week order history per item from the last 4 submitted BOH orders.
+      // Uses a fixed set of the last 4 order dates as the reference frame —
+      // items not on a given order are recorded as explicit 0s.
       const { data: recentOrders } = await supabase
         .from('orders')
         .select('id, submitted_at')
@@ -145,22 +150,9 @@ function BOHOrder() {
         setOrderHistory(history)
       }
 
-      const buildByVendorFromItems = () => {
+      const buildByVendorFromLines = (lineData) => {
         const byVendor = {}
-        CATEGORIES.forEach(c => {
-          fetchedItems.filter(i => i.category === c.key).forEach(item => {
-            const vendor = fetchedVendors.find(v => v.id === item.distributor_id)
-            const key = vendor ? vendor.name : 'Unassigned'
-            if (!byVendor[key]) byVendor[key] = []
-            byVendor[key].push({ ...item, catLabel: c.label, vendorName: key, vendorObj: vendor, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
-          })
-        })
-        return byVendor
-      }
-
-      const buildByVendorFromLines = (lines) => {
-        const byVendor = {}
-        lines.forEach(line => {
+        lineData.forEach(line => {
           const key = line.distributor_name || 'Unassigned'
           if (!byVendor[key]) byVendor[key] = []
           const item = fetchedItems.find(i => i.id === line.item_id)
@@ -172,6 +164,19 @@ function BOHOrder() {
             on_hand_count: line.shelf_count || 0,
             suggested: line.suggested_qty || 0,
             line_id: line.id,
+          })
+        })
+        return byVendor
+      }
+
+      const buildByVendorFromItems = () => {
+        const byVendor = {}
+        CATEGORIES.forEach(c => {
+          fetchedItems.filter(i => i.category === c.key).forEach(item => {
+            const vendor = fetchedVendors.find(v => v.id === item.distributor_id)
+            const key = vendor ? vendor.name : 'Unassigned'
+            if (!byVendor[key]) byVendor[key] = []
+            byVendor[key].push({ ...item, catLabel: c.label, vendorName: key, vendorObj: vendor, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
           })
         })
         return byVendor
@@ -197,11 +202,10 @@ function BOHOrder() {
             const rd = {}
             Object.keys(byVendor).forEach(vn => {
               const needed = byVendor[vn].filter(r => r.suggested > 0)
-              if (needed.length) rd[vn] = needed.map(r => ({
-                ...r, overrideQty: r.suggested, finalQty: r.suggested,
-                orderUnit: r.category === 'weight' ? 'lb' : r.unit || 'each'
-              }))
+              if (needed.length) rd[vn] = needed.map(r => ({ ...r, overrideQty: r.suggested, finalQty: r.suggested, orderUnit: getDefaultUnit(r) }))
             })
+            // Guard: if all items are at/above par, rd is empty — bounce back
+            // rather than landing on a blank recap that would wipe order_lines on submit.
             if (Object.keys(rd).length === 0) {
               alert('All items on this order are now at or above par — nothing left to order.')
               router.push('/boh/ordering')
@@ -217,6 +221,7 @@ function BOHOrder() {
       setLoading(false)
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerId, searchParams])
 
   const toggleCat = (cat) => {
@@ -230,9 +235,7 @@ function BOHOrder() {
   const buildOrderSheet = () => {
     const allItems = []
     CATEGORIES.filter(c => selectedCats.has(c.key)).forEach(c => {
-      items.filter(i => i.category === c.key).forEach(item => {
-        allItems.push({ ...item, catLabel: c.label })
-      })
+      items.filter(i => i.category === c.key).forEach(item => allItems.push({ ...item, catLabel: c.label }))
     })
     if (!allItems.length) { alert('No items in selected categories.'); return }
     const byVendor = {}
@@ -240,7 +243,7 @@ function BOHOrder() {
       const vendor = vendors.find(v => v.id === item.distributor_id)
       const key = vendor ? vendor.name : 'Unassigned'
       if (!byVendor[key]) byVendor[key] = []
-      byVendor[key].push({ ...item, vendorName: key, vendorObj: vendor, on_hand_count: 0, total: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
+      byVendor[key].push({ ...item, vendorName: key, vendorObj: vendor, on_hand_count: 0, suggested: Math.max(0, Math.ceil(item.par || 0)) })
     })
     setOrderRows(byVendor)
     setStep('sheet')
@@ -517,6 +520,7 @@ function BOHOrder() {
   }
 
   const markAsReady = async () => {
+    // Guard: never delete existing order_lines and replace with empty set.
     if (Object.keys(recapRows).length === 0) {
       alert('No items to order — nothing to mark as ready.')
       return
@@ -553,6 +557,7 @@ function BOHOrder() {
   }
 
   const submitOrder = async () => {
+    // Guard: never delete existing order_lines and replace with empty set.
     if (Object.keys(recapRows).length === 0) {
       alert('No items to order — nothing to submit.')
       return
@@ -584,7 +589,7 @@ function BOHOrder() {
           order_id: order.id, user_id: ownerIdToUse, item_id: row.id, item_name: row.name,
           distributor_id: row.distributor_id || null, distributor_name: vn,
           par: row.par || 0, shelf_count: row.on_hand_count || 0, well_count: 0,
-          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null
+          suggested_qty: row.suggested, final_qty: row.finalQty, unit: row.orderUnit || row.unit || null,
         })
       })
     })
@@ -598,77 +603,104 @@ function BOHOrder() {
       vendorGroups[line.distributor_name].lines.push(line)
     })
 
-    const vendorIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
-    const { data: vendorContacts } = await supabase.from('vendors').select('id, name, email, phone, order_method').in('id', vendorIds)
+    const distIds = [...new Set(lines.map(l => l.distributor_id).filter(Boolean))]
+    const { data: distContacts } = await supabase.from('vendors').select('id, name, email, phone, order_method').in('id', distIds)
 
     for (const [, group] of Object.entries(vendorGroups)) {
-      const contact = vendorContacts?.find(v => v.id === group.id)
+      const contact = distContacts?.find(d => d.id === group.id)
       if (!contact) continue
       const orderLines = group.lines.filter(l => l.final_qty > 0)
       if (orderLines.length === 0) continue
       if (contact.email && (contact.order_method?.toLowerCase() === 'email' || contact.order_method?.toLowerCase() === 'both')) {
         try { await fetch('/api/email/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorName: contact.name, distributorEmail: contact.email, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order email failed for', contact.name, err) }
       }
-      if (contact.phone && (contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
+      // BOH vendors use 'Text' (capitalized) as the SMS order method value
+      if (contact.phone && (contact.order_method === 'Text' || contact.order_method?.toLowerCase() === 'sms' || contact.order_method?.toLowerCase() === 'both')) {
         try { await fetch('/api/sms/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ distributorPhone: contact.phone, distributorName: contact.name, barName, managerName, orderLines, orderId: order.id, orderDate }) }) } catch (err) { console.error('Order SMS failed for', contact.name, err) }
       }
     }
 
     try {
-      const vendorGroupsForPDF = Object.entries(vendorGroups).map(([name, group]) => {
-        const contact = vendorContacts?.find(v => v.id === group.id)
+      const distGroupsForPDF = Object.entries(vendorGroups).map(([name, group]) => {
+        const contact = distContacts?.find(d => d.id === group.id)
         return { name, email: contact?.email || null, lines: group.lines.filter(l => l.final_qty > 0) }
       }).filter(g => g.lines.length > 0)
-      const totalItems = vendorGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
-      const pdfRes = await fetch('/api/orders/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: vendorGroupsForPDF, totalItems }) })
+      const totalItems = distGroupsForPDF.reduce((sum, g) => sum + g.lines.length, 0)
+      const pdfRes = await fetch('/api/orders/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems }) })
       const pdfData = await pdfRes.json()
       if (pdfData.pdfUrl) {
-        const { error: urlError } = await supabase.from('orders').update({ pdf_url: pdfData.pdfUrl }).eq('id', order.id)
-        if (urlError) console.error('PDF URL save error:', urlError)
+        await fetch('/api/email/order-confirmation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems }) })
       }
-    } catch (err) { console.error('PDF generation error:', err) }
+    } catch (err) { console.error('PDF/email confirmation error:', err) }
 
-    setSubmitted(true)
     setSubmitting(false)
-    router.push('/boh/ordering')
+    setSubmitted(true)
   }
 
-  if (loading) return <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div></div>
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
+    </div>
+  )
+
+  if (submitted) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', padding: '20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '48px 32px', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
+        <div style={{ fontSize: '52px', marginBottom: '16px' }}>✅</div>
+        <h2 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Order submitted!</h2>
+        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your BOH order has been sent to your vendors.</p>
+        <button onClick={() => router.push('/boh/ordering')} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>← Back to BOH Ordering</button>
+      </div>
+    </div>
+  )
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f5f3', padding: '20px', boxSizing: 'border-box' }}>
-      <div style={{ maxWidth: '1200px', margin: '0 auto', background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+          <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
+        </div>
+        <button onClick={() => step === 'select' ? router.push('/boh/ordering') : setStep(step === 'recap' ? 'sheet' : 'select')}
+          style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
+          ← {step === 'select' ? 'BOH Ordering' : step === 'sheet' ? 'Categories' : 'Order Sheet'}
+        </button>
+      </div>
+
+      <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
+
         {step === 'select' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '18px' : '24px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Build Order</h1>
-            <p style={{ color: '#999', fontSize: '14px', marginBottom: '20px' }}>Select categories to include in this order.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr 1fr', gap: '12px', marginBottom: '24px' }}>
-              {CATEGORIES.map(c => (
-                <button
-                  key={c.key}
-                  onClick={() => toggleCat(c.key)}
-                  style={{
-                    padding: '16px', border: selectedCats.has(c.key) ? '2px solid #3B6D11' : '1px solid #e8e8e8',
-                    background: selectedCats.has(c.key) ? '#f0f7ec' : '#fff', borderRadius: '10px',
-                    cursor: 'pointer', fontSize: '14px', fontWeight: '600', color: selectedCats.has(c.key) ? '#3B6D11' : '#555',
-                    display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center'
-                  }}
-                >
-                  <span style={{ fontSize: '18px' }}>{c.icon}</span>
-                  {c.label}
-                </button>
-              ))}
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Build BOH Order</h1>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '20px' }}>Select which categories to include.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '10px', marginBottom: '20px' }}>
+              {CATEGORIES.map(c => {
+                const count = items.filter(i => i.category === c.key).length
+                const selected = selectedCats.has(c.key)
+                return (
+                  <div key={c.key} onClick={() => toggleCat(c.key)}
+                    style={{ background: '#fff', border: `2px solid ${selected ? '#F5B800' : '#e8e8e8'}`, borderRadius: '12px', padding: isMobile ? '12px' : '16px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s', boxShadow: selected ? '0 2px 12px rgba(245,184,0,.12)' : 'none' }}>
+                    <div style={{ fontSize: isMobile ? '24px' : '28px', marginBottom: '4px' }}>{c.icon}</div>
+                    <div style={{ fontSize: isMobile ? '12px' : '13px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
+                    <div style={{ fontSize: '11px', color: '#aaa' }}>{count} item{count !== 1 ? 's' : ''}</div>
+                  </div>
+                )
+              })}
             </div>
-            <button onClick={buildOrderSheet} style={{ width: '100%', padding: '14px', background: '#3B6D11', color: '#fff', border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: '700', cursor: 'pointer' }}>
-              Start Order →
+            <button onClick={buildOrderSheet} style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+              Build Order Sheet →
             </button>
           </>
         )}
 
         {step === 'sheet' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Sheet</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Enter on-hand counts and adjust pars as needed.</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+              <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>BOH Order Sheet</h1>
+              {draftOrder && <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>Draft saved</span>}
+            </div>
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#a07800' }}>
+              💡 Enter what you have on hand — suggested qty calculates automatically.
+            </div>
             {Object.keys(orderRows).map(vn => {
               const vendor = vendors.find(v => v.name === vn)
               return (
@@ -676,29 +708,43 @@ function BOHOrder() {
                   <div style={{ background: '#111', borderRadius: '10px 10px 0 0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '14px' }}>🚚</span>
                     <span style={{ fontWeight: '600', color: '#fff', fontSize: '13px' }}>{vn}</span>
-                    {vendor?.email && !isMobile && <span style={{ fontSize: '11px', color: '#aaa', marginLeft: '8px' }}>{vendor.email}</span>}
+                    {vendor?.order_method && <span style={{ marginLeft: 'auto', background: '#F5B800', color: '#000', borderRadius: '10px', fontSize: '10px', padding: '2px 8px', fontWeight: '600' }}>{vendor.order_method}</span>}
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      orderRows[vn].map((row, ri) => (
-                        <div key={row.id} style={{ padding: '14px', borderBottom: '1px solid #f5f5f5' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                            <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>{row.name}</div>
-                            <button onClick={() => removeItemFromOrder(vn, ri)} style={{ background: '#ff4444', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                      orderRows[vn].map((row, ri) => {
+                        const hist = getItemHistory(row.id)
+                        const avg = getItemHistoryAvg(row.id)
+                        return (
+                        <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '4px' }}>
+                            {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
                           </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                          <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '8px' }}>
+                            {hist.length > 0 ? (
+                              <>Last 4: {hist.map(h => h.qty).join(' · ')} <span style={{ color: '#888', fontWeight: '600' }}>(avg {avg.toFixed(1)})</span></>
+                            ) : (
+                              <span style={{ color: '#ccc' }}>No order history yet</span>
+                            )}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
-                              <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa' }} />
+                              <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>On Hand</div>
-                              <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #F5B800', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
+                              <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Suggested</div>
+                              <div style={{ textAlign: 'center', padding: '6px', fontSize: '16px', fontWeight: '700', color: row.suggested > 0 ? '#3B6D11' : '#ccc' }}>{row.suggested}</div>
                             </div>
                           </div>
-                          <div style={{ fontSize: '13px', fontWeight: '700', color: row.suggested > 0 ? '#3B6D11' : '#ccc' }}>Suggested: {row.suggested}</div>
                         </div>
-                      ))
+                      )})
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
@@ -722,10 +768,12 @@ function BOHOrder() {
                                 {avg !== null ? avg.toFixed(1) : '--'}
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)} style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                                <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)} style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
+                                <input type="number" min="0" step="0.01" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(vn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
@@ -741,7 +789,7 @@ function BOHOrder() {
               )
             })}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={openAddItemModal} style={{ background: '#e8f5e9', color: '#2e7d32', border: '1px solid #a5d6a7', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+              <button onClick={openAddItemModal} style={{ background: '#fff', color: '#333', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
                 ➕ Add Item
               </button>
               <button onClick={saveDraft} disabled={saving} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
@@ -756,7 +804,7 @@ function BOHOrder() {
 
         {step === 'recap' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Recap</h1>
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>BOH Order Recap</h1>
             <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Adjust quantities and units if needed.</p>
             {Object.keys(recapRows).map(vn => {
               const vendor = vendors.find(v => v.name === vn)
@@ -778,7 +826,7 @@ function BOHOrder() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
                               <div style={{ background: '#fafafa', borderRadius: '8px', padding: '8px 12px' }}>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>On Hand</div>
-                                <div style={{ fontSize: '15px', fontWeight: '600', color: '#000' }}>{Number(row.on_hand_count || 0).toFixed(1)}</div>
+                                <div style={{ fontSize: '15px', fontWeight: '600', color: '#000' }}>{Number(row.on_hand_count || 0).toFixed(2)}</div>
                               </div>
                               <div style={{ background: '#fafafa', borderRadius: '8px', padding: '8px 12px' }}>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>Suggested</div>
@@ -788,12 +836,13 @@ function BOHOrder() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Order Qty</div>
-                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
+                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
+                                  style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
                               </div>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Unit</div>
                                 {canSwitch && unitOptions.length > 1 ? (
-                                  <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', color: '#000' }}>
+                                  <select value={row.orderUnit} onChange={e => updateRecapUnit(vn, ri, e.target.value)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '14px', background: '#fafafa', color: '#000' }}>
                                     {unitOptions.map(u => <option key={u} value={u}>{u}</option>)}
                                   </select>
                                 ) : (
@@ -819,11 +868,12 @@ function BOHOrder() {
                             return (
                               <tr key={row.id} style={{ borderBottom: '1px solid #f8f8f8' }}>
                                 <td style={{ padding: '10px 12px', fontSize: '13px' }}><div style={{ fontWeight: '500', color: '#000' }}>{row.name}</div>{row.notes && <div style={{ fontSize: '10px', color: '#aaa', marginTop: '1px' }}>{row.notes}</div>}</td>
-                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(1)}</td>
+                                <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{Number(row.on_hand_count || 0).toFixed(2)}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)} style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
+                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(vn, ri, parseFloat(e.target.value) || 0)}
+                                    style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
                                 </td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                                   {canSwitch && unitOptions.length > 1 ? (
@@ -917,7 +967,7 @@ function BOHOrder() {
                     <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Item Name *</label>
                     <input
                       type="text"
-                      placeholder="e.g., Ribeye Steak"
+                      placeholder="e.g., Beef Ribeye"
                       value={newItemForm.name}
                       onChange={e => setNewItemForm({ ...newItemForm, name: e.target.value })}
                       style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
@@ -940,7 +990,7 @@ function BOHOrder() {
                       <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Item Type</label>
                       <select
                         value={newItemForm.item_type}
-                        onChange={e => setNewItemForm({ ...newItemForm, item_type: e.target.value, unit: UNITS[e.target.value]?.[0] || 'each' })}
+                        onChange={e => setNewItemForm({ ...newItemForm, item_type: e.target.value, unit: UNITS_BY_TYPE[e.target.value][0] })}
                         style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
                       >
                         {ITEM_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -956,7 +1006,7 @@ function BOHOrder() {
                         onChange={e => setNewItemForm({ ...newItemForm, unit: e.target.value })}
                         style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
                       >
-                        {UNITS[newItemForm.item_type]?.map(u => <option key={u} value={u}>{u}</option>)}
+                        {UNITS_BY_TYPE[newItemForm.item_type]?.map(u => <option key={u} value={u}>{u}</option>)}
                       </select>
                     </div>
 

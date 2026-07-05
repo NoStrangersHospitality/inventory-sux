@@ -19,6 +19,7 @@ function Order() {
   const [draftOrder, setDraftOrder] = useState(null)
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
+  // Map of item_id -> array of { qty, date } for the last 4 submitted orders that included it, most recent first
   const [orderHistory, setOrderHistory] = useState({})
   const [showAddItemModal, setShowAddItemModal] = useState(false)
   const [addItemSearchTerm, setAddItemSearchTerm] = useState('')
@@ -78,8 +79,12 @@ function Order() {
     return [item.unit || 'bottle']
   }
 
+  // Returns up to the last 4 ordered quantities for an item, most recent first.
+  // Each entry is { qty, date }. Empty array if the item has never been ordered.
   const getItemHistory = (itemId) => orderHistory[itemId] || []
 
+  // Average of available history entries (could be fewer than 4 for newer items).
+  // Returns null if there's no history at all, so callers can render '--' instead of '0'.
   const getItemHistoryAvg = (itemId) => {
     const hist = getItemHistory(itemId)
     if (!hist.length) return null
@@ -113,6 +118,12 @@ function Order() {
       setItems(fetchedItems)
       setDistributors(fetchedDists)
 
+      // Build 4-week order history per item from the last 4 submitted FOH orders.
+      // Unlike before, this now uses a FIXED set of the last 4 order dates as the
+      // reference frame — if an item wasn't on a given order's line items, that's
+      // recorded as an explicit 0 (it genuinely wasn't ordered that week), not
+      // treated as missing data. This makes "ordered 0 every week" visible, which
+      // is exactly the signal for "this par may be too high."
       const { data: recentOrders } = await supabase
         .from('orders')
         .select('id, submitted_at')
@@ -129,6 +140,7 @@ function Order() {
           .select('item_id, final_qty, order_id')
           .in('order_id', orderIds)
 
+        // qtyByItemAndOrder[itemId][orderId] = final_qty actually ordered
         const qtyByItemAndOrder = {}
         ;(historyLines || []).forEach(line => {
           if (!line.item_id) return
@@ -136,6 +148,9 @@ function Order() {
           qtyByItemAndOrder[line.item_id][line.order_id] = line.final_qty
         })
 
+        // For every item that appeared on ANY of the last 4 orders, build a full
+        // 4-entry history against the fixed recentOrders frame — filling 0 for
+        // any order where that item had no line.
         const history = {}
         const itemIdsWithAnyHistory = new Set(Object.keys(qtyByItemAndOrder))
         itemIdsWithAnyHistory.forEach(itemId => {
@@ -205,6 +220,11 @@ function Order() {
                 orderUnit: r.category === 'wine' ? 'case' : r.category === 'liquor' ? 'bottle' : r.unit || 'bottle'
               }))
             })
+            // Guard: if every item is now at/above par, rd ends up empty.
+            // Don't land on a blank recap screen — bounce back to the hub instead.
+            // (Previously this would set step('recap') with an empty recapRows,
+            // and hitting Mark as Ready / Submit Order from there would wipe
+            // the existing order_lines down to 0.)
             if (Object.keys(rd).length === 0) {
               alert('All items on this order are now at or above par — nothing left to order.')
               router.push('/foh/ordering')
@@ -220,6 +240,7 @@ function Order() {
       setLoading(false)
     }
     init()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ownerId, searchParams])
 
   const toggleCat = (cat) => {
@@ -520,6 +541,9 @@ function Order() {
   }
 
   const markAsReady = async () => {
+    // Guard: never delete existing order_lines and replace them with
+    // an empty set. If recapRows is empty there's nothing to write,
+    // and proceeding would wipe out a previously-saved order.
     if (Object.keys(recapRows).length === 0) {
       alert('No items to order — nothing to mark as ready.')
       return
@@ -556,6 +580,7 @@ function Order() {
   }
 
   const submitOrder = async () => {
+    // Same guard as markAsReady — don't wipe order_lines with an empty insert.
     if (Object.keys(recapRows).length === 0) {
       alert('No items to order — nothing to submit.')
       return
@@ -626,52 +651,78 @@ function Order() {
       const pdfRes = await fetch('/api/orders/generate-pdf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: order.id, userId: session.user.id, barName, managerName, orderDate, distributorGroups: distGroupsForPDF, totalItems }) })
       const pdfData = await pdfRes.json()
       if (pdfData.pdfUrl) {
-        const { error: urlError } = await supabase.from('orders').update({ pdf_url: pdfData.pdfUrl }).eq('id', order.id)
-        if (urlError) console.error('PDF URL save error:', urlError)
+        await fetch('/api/email/order-confirmation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: session.user.email, barName, managerName, orderDate, orderId: order.id, pdfUrl: pdfData.pdfUrl, distributorGroups: distGroupsForPDF, totalItems }) })
       }
-    } catch (err) { console.error('PDF generation error:', err) }
+    } catch (err) { console.error('PDF/email confirmation error:', err) }
 
-    setSubmitted(true)
     setSubmitting(false)
-    router.push('/foh/ordering')
+    setSubmitted(true)
   }
 
-  if (loading) return <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div></div>
+  if (loading) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <div style={{ color: '#aaa', fontSize: '14px' }}>Loading...</div>
+    </div>
+  )
+
+  if (submitted) return (
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif', padding: '20px' }}>
+      <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '16px', padding: '48px 32px', textAlign: 'center', maxWidth: '400px', width: '100%' }}>
+        <div style={{ fontSize: '52px', marginBottom: '16px' }}>✅</div>
+        <h2 style={{ fontSize: '20px', fontWeight: '500', color: '#000', marginBottom: '8px' }}>Order submitted!</h2>
+        <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '28px' }}>Your order has been sent to your distributors.</p>
+        <button onClick={() => router.push('/foh/ordering')} style={{ background: '#F5B800', color: '#000', border: 'none', padding: '12px 28px', borderRadius: '8px', fontSize: '14px', fontWeight: '700', cursor: 'pointer', width: '100%' }}>← Back to Ordering</button>
+      </div>
+    </div>
+  )
 
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f5f3', padding: '20px', boxSizing: 'border-box' }}>
-      <div style={{ maxWidth: '1200px', margin: '0 auto', background: '#fff', borderRadius: '12px', padding: '24px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+    <div style={{ minHeight: '100vh', background: '#f5f5f3', fontFamily: '-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif' }}>
+      <div style={{ background: '#fff', borderBottom: '2px solid #F5B800', padding: isMobile ? '10px 16px' : '10px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div onClick={() => router.push('/dashboard')} style={{ fontSize: isMobile ? '18px' : '22px', fontWeight: '900', fontStyle: 'italic', letterSpacing: '-1px', cursor: 'pointer' }}>
+          <span style={{ color: '#000' }}>Inventory</span><span style={{ color: '#F5B800' }}>Sux</span>
+        </div>
+        <button onClick={() => step === 'select' ? router.push('/foh/ordering') : setStep(step === 'recap' ? 'sheet' : 'select')}
+          style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}>
+          ← {step === 'select' ? 'Ordering' : step === 'sheet' ? 'Categories' : 'Order Sheet'}
+        </button>
+      </div>
+
+      <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '1100px', margin: '0 auto' }}>
+
         {step === 'select' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '18px' : '24px', fontWeight: '600', color: '#000', marginBottom: '6px' }}>Build Order</h1>
-            <p style={{ color: '#999', fontSize: '14px', marginBottom: '20px' }}>Select categories to include in this order.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr 1fr', gap: '12px', marginBottom: '24px' }}>
-              {CATEGORIES.map(c => (
-                <button
-                  key={c.key}
-                  onClick={() => toggleCat(c.key)}
-                  style={{
-                    padding: '16px', border: selectedCats.has(c.key) ? '2px solid #3B6D11' : '1px solid #e8e8e8',
-                    background: selectedCats.has(c.key) ? '#f0f7ec' : '#fff', borderRadius: '10px',
-                    cursor: 'pointer', fontSize: '14px', fontWeight: '600', color: selectedCats.has(c.key) ? '#3B6D11' : '#555',
-                    display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center'
-                  }}
-                >
-                  <span style={{ fontSize: '18px' }}>{c.icon}</span>
-                  {c.label}
-                </button>
-              ))}
+            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Build Order</h1>
+            <p style={{ color: '#999', fontSize: '13px', marginBottom: '20px' }}>Select which categories to include.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: '12px', marginBottom: '20px' }}>
+              {CATEGORIES.map(c => {
+                const count = items.filter(i => i.category === c.key).length
+                const selected = selectedCats.has(c.key)
+                return (
+                  <div key={c.key} onClick={() => toggleCat(c.key)}
+                    style={{ background: '#fff', border: `2px solid ${selected ? '#F5B800' : '#e8e8e8'}`, borderRadius: '14px', padding: isMobile ? '16px' : '24px 16px', cursor: 'pointer', textAlign: 'center', transition: 'border-color .15s', boxShadow: selected ? '0 2px 12px rgba(245,184,0,.12)' : 'none' }}>
+                    <div style={{ fontSize: isMobile ? '28px' : '32px', marginBottom: '6px' }}>{c.icon}</div>
+                    <div style={{ fontSize: isMobile ? '14px' : '15px', fontWeight: '600', color: '#000', marginBottom: '2px' }}>{c.label}</div>
+                    <div style={{ fontSize: '12px', color: '#aaa' }}>{count} item{count !== 1 ? 's' : ''}</div>
+                  </div>
+                )
+              })}
             </div>
-            <button onClick={buildOrderSheet} style={{ width: '100%', padding: '14px', background: '#3B6D11', color: '#fff', border: 'none', borderRadius: '10px', fontSize: '16px', fontWeight: '700', cursor: 'pointer' }}>
-              Start Order →
+            <button onClick={buildOrderSheet} style={{ width: '100%', background: '#F5B800', color: '#000', border: 'none', padding: '14px', borderRadius: '10px', fontSize: '15px', fontWeight: '700', cursor: 'pointer' }}>
+              Build Order Sheet →
             </button>
           </>
         )}
 
         {step === 'sheet' && (
           <>
-            <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000', marginBottom: '6px' }}>Order Sheet</h1>
-            <p style={{ color: '#999', fontSize: '13px', marginBottom: '16px' }}>Enter on-hand counts and adjust pars as needed.</p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '6px' }}>
+              <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Order Sheet</h1>
+              {draftOrder && <span style={{ background: '#FAEEDA', color: '#854F0B', border: '1px solid #f0c080', borderRadius: '10px', fontSize: '11px', padding: '3px 10px', fontWeight: '500' }}>Draft saved</span>}
+            </div>
+            <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#a07800' }}>
+              💡 Enter what you have on hand — suggested qty calculates automatically.
+            </div>
             {Object.keys(orderRows).map(dn => {
               const dist = distributors.find(d => d.name === dn)
               return (
@@ -679,29 +730,43 @@ function Order() {
                   <div style={{ background: '#111', borderRadius: '10px 10px 0 0', padding: '10px 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <span style={{ fontSize: '14px' }}>🚚</span>
                     <span style={{ fontWeight: '600', color: '#fff', fontSize: '13px' }}>{dn}</span>
-                    {dist?.email && !isMobile && <span style={{ fontSize: '11px', color: '#aaa', marginLeft: '8px' }}>{dist.email}</span>}
+                    {dist?.order_method && <span style={{ marginLeft: 'auto', background: '#F5B800', color: '#000', borderRadius: '10px', fontSize: '10px', padding: '2px 8px', fontWeight: '600' }}>{dist.order_method}</span>}
                   </div>
                   <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', overflow: 'hidden' }}>
                     {isMobile ? (
-                      orderRows[dn].map((row, ri) => (
-                        <div key={row.id} style={{ padding: '14px', borderBottom: '1px solid #f5f5f5' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
-                            <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>{row.name}</div>
-                            <button onClick={() => removeItemFromOrder(dn, ri)} style={{ background: '#ff4444', color: '#fff', border: 'none', borderRadius: '4px', width: '24px', height: '24px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+                      orderRows[dn].map((row, ri) => {
+                        const hist = getItemHistory(row.id)
+                        const avg = getItemHistoryAvg(row.id)
+                        return (
+                        <div key={row.id} style={{ padding: '12px 14px', borderBottom: '1px solid #f5f5f5' }}>
+                          <div style={{ fontSize: '13px', fontWeight: '500', color: '#000', marginBottom: '4px' }}>
+                            {row.name}<span style={{ marginLeft: '8px', fontSize: '11px', color: '#aaa', fontWeight: '400' }}>{row.unit || ''}</span>
                           </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
+                          <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '8px' }}>
+                            {hist.length > 0 ? (
+                              <>Last 4: {hist.map(h => h.qty).join(' · ')} <span style={{ color: '#888', fontWeight: '600' }}>(avg {avg.toFixed(1)})</span></>
+                            ) : (
+                              <span style={{ color: '#ccc' }}>No order history yet</span>
+                            )}
+                          </div>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
-                              <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa' }} />
+                              <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>On Hand</div>
-                              <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #F5B800', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
+                              <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                style={{ width: '100%', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fffbe6', fontWeight: '600' }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Suggested</div>
+                              <div style={{ textAlign: 'center', padding: '6px', fontSize: '16px', fontWeight: '700', color: row.suggested > 0 ? '#3B6D11' : '#ccc' }}>{row.suggested}</div>
                             </div>
                           </div>
-                          <div style={{ fontSize: '13px', fontWeight: '700', color: row.suggested > 0 ? '#3B6D11' : '#ccc' }}>Suggested: {row.suggested}</div>
                         </div>
-                      ))
+                      )})
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
@@ -725,10 +790,12 @@ function Order() {
                                 {avg !== null ? avg.toFixed(1) : '--'}
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)} style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
+                                <input type="number" min="0" defaultValue={row.par || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)} style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
+                                <input type="number" min="0" step="0.1" value={row.on_hand_count === 0 ? '' : row.on_hand_count} onChange={e => updateRow(dn, ri, 'on_hand_count', parseFloat(e.target.value) || 0)}
+                                  style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
@@ -744,7 +811,7 @@ function Order() {
               )
             })}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={openAddItemModal} style={{ background: '#e8f5e9', color: '#2e7d32', border: '1px solid #a5d6a7', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+              <button onClick={openAddItemModal} style={{ background: '#fff', color: '#333', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
                 ➕ Add Item
               </button>
               <button onClick={saveDraft} disabled={saving} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
@@ -791,7 +858,8 @@ function Order() {
                             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Order Qty</div>
-                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)} style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
+                                <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
+                                  style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '8px 12px', fontSize: '16px', background: '#fafafa', fontWeight: '600' }} />
                               </div>
                               <div>
                                 <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Unit</div>
@@ -826,7 +894,8 @@ function Order() {
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#555', fontSize: '12px' }}>{row.par || 0}</td>
                                 <td style={{ padding: '10px 12px', textAlign: 'center', color: '#3B6D11', fontWeight: '600' }}>{row.suggested}</td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
-                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)} style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
+                                  <input type="number" min="0" step="0.01" value={row.overrideQty === 0 ? '' : row.overrideQty} onChange={e => updateRecapQty(dn, ri, parseFloat(e.target.value) || 0)}
+                                    style={{ width: '70px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '5px', fontSize: '13px', background: '#fafafa' }} />
                                 </td>
                                 <td style={{ padding: '8px 12px', textAlign: 'center' }}>
                                   {canSwitch && unitOptions.length > 1 ? (
