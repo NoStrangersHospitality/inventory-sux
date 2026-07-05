@@ -171,6 +171,20 @@ If a `.insert()` call into a table feeds a cost calculation or a downstream disp
 
 ---
 
+## Order Sheet Item Management
+
+**Added July 5, 2026**: FOH and BOH ordering pages now support ad hoc item addition and removal during order creation.
+
+- **Add Item button** (green, on sheet view): Opens modal with two options:
+  - **Search existing items**: Searches all FOH/BOH inventory items (regardless of `on_menu` status), excludes items already in current order
+  - **Create new item**: Prompts for name, category, unit, and `on_menu` flag; creates new row in `inventory_items` immediately
+- **Remove button** (red X, right column of each item): 
+  - Removes item from current order (both `orderRows` and `recapRows`)
+  - Sets `on_menu = false` in `inventory_items` (prevents item from auto-appearing in future orders)
+- **Implementation**: Both FOH (`app/foh/ordering/order/page.js`) and BOH (`app/boh/ordering/order/page.js`) have identical add/remove functions — **keep in sync** if modifying.
+
+---
+
 ## Outstanding / Pinned Items
 
 - [ ] COGS ↔ Inventory full DB unification (see above) — dedicated session needed
@@ -178,3 +192,4 @@ If a `.insert()` call into a table feeds a cost calculation or a downstream disp
 - [ ] Dual-purpose accounts (real subscriber + is_admin) always redirect to `/admin` on login — minor friction, not fixed
 - [ ] Rep reply notification UI polish — re-test once a real distributor reply comes through post email-parsing-fix
 - [ ] Audit other FOH/BOH page pairs for similar drift (only `order_lines.unit` has been checked/fixed so far)
+- [ ] Export count functionality for R365/MarketMan/MarginEdge (pinned for next session, features built: `lib/exportFormats.js` planned, modal component needs wiring)
