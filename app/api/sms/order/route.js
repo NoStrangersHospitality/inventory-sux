@@ -26,7 +26,7 @@ export async function POST(request) {
 
     // Build item list — keep SMS concise
     const itemList = orderLines
-      .map(line => `• ${line.item_name} x${line.final_qty}`)
+      .map(line => `• ${line.item_name} x${line.final_qty}${line.unit ? ` (${line.unit})` : ''}`)
       .join('\n')
 
     const message = `New order from ${barName} (${orderDate}):
