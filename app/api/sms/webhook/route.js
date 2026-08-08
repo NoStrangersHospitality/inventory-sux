@@ -20,10 +20,18 @@ export async function POST(request) {
 
     const cleanPhone = from.replace(/\D/g, '').slice(-10)
 
-    const { data: distributors } = await supabase
+    // Fetch all distributors that have a phone number, then filter in JS
+    // by stripping formatting from stored numbers before comparing.
+    // This handles any format: (805)-202-6745, 805-202-6745, +18052026745 etc.
+    const { data: allDistributors } = await supabase
       .from('distributors')
-      .select('id, name, user_id')
-      .ilike('phone', `%${cleanPhone}%`)
+      .select('id, name, user_id, phone')
+      .not('phone', 'is', null)
+
+    const distributors = (allDistributors || []).filter(d => {
+      const storedClean = (d.phone || '').replace(/\D/g, '').slice(-10)
+      return storedClean === cleanPhone
+    })
 
     if (!distributors || distributors.length === 0) {
       console.log('SMS webhook: no distributor found for phone', cleanPhone)
