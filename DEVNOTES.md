@@ -13,6 +13,11 @@ Living reference for patterns, conventions, and gotchas established during devel
 - **Production URL**: `app.inventorysux.com`
 - **Areas**: The app is split into **FOH** (front of house — bar/spirits/wine) and **BOH** (back of house — kitchen). Most tables have an `area` column (`'foh'` | `'boh'`) and pages live under `app/foh/...` and `app/boh/...` with largely parallel structure.
 
+### ⚠️ File delivery — download filenames are NOT repo paths
+When Claude hands over finished files as downloads, the download filename is just a flat label (the download tool can't create nested folders like `app/foh/ordering/receive/[orderId]/`). It is **never** an instruction to rename, move, or restructure anything in the repo — in Next.js App Router, a file's path *is* its route, so renaming one breaks the page it serves.
+
+**Instructions must always separate the two clearly**: "open `foh-ordering-receive-page.js`, paste its content into `app/foh/ordering/receive/[orderId]/page.js` — the path doesn't change, only the content." If a delivery message reads like "replace X with Y" without saying the real repo path stays the same, that's a bug in the instructions, not a real rename — stop and clarify before running anything.
+
 ### ⚠️ FOH/BOH pages drift — check both before assuming consistency
 FOH and BOH ordering pages (`app/foh/ordering/order/page.js` and `app/boh/ordering/order/page.js`) are structurally parallel but maintained as separate files, not shared components. They have already drifted at least once: BOH's `markAsReady`/`submitOrder` correctly wrote `unit: row.orderUnit || row.unit || null` to `order_lines`, while FOH's equivalent functions never wrote a `unit` field at all — silently breaking the PDF/email order summary's UNIT column for FOH orders for an unknown period before being caught (see Outstanding Items below for the fix). **Any bug fix or feature added to one of these pages should be checked against its sibling before assuming the other one already has it** — don't assume parity just because they look structurally identical.
 
@@ -85,15 +90,30 @@ useEffect(() => {
 
 ---
 
-## Invoice Scanning & Approval Flow
+## Receiving Confirmation Flow — source of truth for `on_hand`
 
-**Two-step flow**: Scan → Review/Match → **Save for Approval** (writes `invoice_lines`, no inventory changes, status → `processed`) → Hub shows **Approve** button on `processed` invoices → **Approve** reads saved lines and writes to `inventory_items` + `inventory_history`, status → `confirmed`.
+**As of August 23, 2026: receiving confirmation is what writes `on_hand`.** Invoice scanning is a record-keeping/audit layer only (see next section) — this was a deliberate architecture flip from an earlier "invoice writes on_hand" design, made because distributors substitute SKUs/vintages/sizes and receiving alone can't catch that (a future phase will have invoice scanning flag those discrepancies against the matched order — not built yet).
+
+- **Per-line, not per-distributor**: each `order_lines` row resolves independently (`receiving_status`: `received` / `short` / `missing`, or `null` = still open). A distributor's section only locks once every one of its lines is resolved — a backordered item can stay open indefinitely and get checked in days later without re-touching the rest.
+- **Confirm buttons**: 🟢 *All Received* (every open line, full ordered qty) · 🟡 *Confirm As Shown* (only currently-checked open lines; unchecked lines stay open, untouched) · 🔴 *Reject Remaining* (marks all still-open lines missing, no inventory write).
+- **On confirm**: for each line being resolved as received, `inventory_items.on_hand` increments by `received_qty`, logged to `inventory_history` as `event_type: 'receiving'`.
+- **Reopen** on an already-closed distributor reverses exactly what was written (logged as `event_type: 'receiving_reversal'`) before handing the lines back as open. This is load-bearing — reopening without reversal would double-count `on_hand` on re-confirm.
+- **Cost (`unit_cost`) is set once**, when an item is created (inventory database page) — never touched by receiving or invoice approval.
+
+### Pinned / not yet built
+Per-distributor order identifiers (format `MMDD-DIST-##`, e.g. `0823-SOU-01`) so invoice scanning can associate to a specific distributor-order and flag SKU/vintage/size discrepancies against it. An order can have multiple invoices over time (no lock-out). Walk-in/no-order deliveries route through manual inventory adjustment, not invoice scanning.
+
+---
+
+## Invoice Scanning & Approval — record-keeping only
+
+**Not a source of truth for `on_hand`** (see Receiving Confirmation above). Flow: Scan → Review/Match → **Save for Approval** (writes `invoice_lines`, status → `processed`) → Hub shows **Approve** on `processed` invoices → **Approve** marks the invoice `confirmed` and refreshes `item_aliases` for future OCR matching. **It does not write `inventory_items.on_hand`/`unit_cost` and does not create new inventory items** — matching only goes to existing items; unmatched lines stay unmatched for the record. New items are created via the inventory database page, not from an invoice.
 
 ### `invoices.status` — CHECK CONSTRAINT
 Only allows: `'pending'`, `'processing'`, `'processed'`, `'confirmed'`. **`'scanned'` is NOT allowed** — use `'processed'` for the initial upload status (we use `processed` for both "just scanned" and "saved, awaiting approval" — there's no separate scanned state).
 
 ### `invoice_lines.match_status` — CHECK CONSTRAINT
-Allows: `'matched'`, `'unmatched'`, `'manual'`, `'create_new'`, `'low_confidence'`. (Originally only allowed `matched`/`unmatched`/`manual` — had to be widened.)
+Allows: `'matched'`, `'unmatched'`, `'manual'`, `'create_new'`, `'low_confidence'`. (`create_new` is a legacy value from before the invoice-approve rework above — no longer produced by the UI, but existing rows may still have it.)
 
 ### `invoice_lines` schema (additions beyond original)
 ```sql
@@ -102,18 +122,14 @@ alter table invoice_lines add column if not exists new_category text;
 alter table invoice_lines add column if not exists case_size integer default 1;
 alter table invoice_lines add column if not exists item_number text;
 ```
-- `item_number` carries the distributor SKU from the scan through to `inventory_items.item_number` on approve (for both new items and matches).
-- `is_create_new` flags lines that should create a brand-new `inventory_items` row on approve.
-- `case_size` is used to convert invoice qty (cases) → `on_hand` units, and to back-calculate per-unit cost from case cost for BOH items.
+- `item_number` carries the distributor SKU from the scan through for matching.
+- `is_create_new`/`new_category` are legacy columns from the old create-new-item-on-approve flow — no longer written by the UI, left in place for historical rows.
+- `case_size` is still captured on scan for future use but no longer drives an `on_hand` write from this flow.
 
 ### `/api/scan-invoice` (Claude Haiku OCR)
 - Extracts `vendor`, `invoice_number`, `invoice_date`, `total_amount`, and `line_items[]` with `raw_name`, `item_number`, `qty`, `unit`, `unit_cost`, `total_cost`.
 - Does SKU-first matching against `inventory_items.item_number`, falls back to fuzzy name matching (`similarityScore`).
-- Match statuses: `matched` (SKU or high name-similarity), `low_confidence` (weak name match), `create_new` (user selected "+ Create new item"), `unmatched`.
-
-### FOH vs BOH approve differences
-- **FOH**: `unit_cost` on new/updated items = invoice unit_cost directly (cost is per-bottle/unit as scanned).
-- **BOH**: case-based items — `unit_cost` = `unit_cost / case_size` when `case_size > 1` (storing per-unit cost, not per-case), and `on_hand` increments by `qty * case_size`.
+- Match statuses returned by the API: `matched` (SKU or high name-similarity), `low_confidence` (weak name match), `unmatched`. (`create_new` was only ever client-side UI, never server-set.)
 
 ---
 
@@ -187,9 +203,10 @@ If a `.insert()` call into a table feeds a cost calculation or a downstream disp
 
 ## Outstanding / Pinned Items
 
+- [ ] Per-distributor order IDs (`MMDD-DIST-##`) + invoice-to-order association UI (OCR reads distributor → surfaces recent matching distributor-orders → "Add Order" manual fallback) — needed to make invoice scanning catch SKU/vintage/size discrepancies against the matched order
 - [ ] COGS ↔ Inventory full DB unification (see above) — dedicated session needed
 - [ ] Admin permission guards — prevent admins from deactivating each other or the owner account
 - [ ] Dual-purpose accounts (real subscriber + is_admin) always redirect to `/admin` on login — minor friction, not fixed
 - [ ] Rep reply notification UI polish — re-test once a real distributor reply comes through post email-parsing-fix
-- [ ] Audit other FOH/BOH page pairs for similar drift (only `order_lines.unit` has been checked/fixed so far)
+- [ ] Audit other FOH/BOH page pairs for similar drift (only `order_lines.unit` has been checked/fixed so far; receive pages just reworked Aug 23, 2026)
 - [ ] Export count functionality for R365/MarketMan/MarginEdge (pinned for next session, features built: `lib/exportFormats.js` planned, modal component needs wiring)
