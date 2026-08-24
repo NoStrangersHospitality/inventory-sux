@@ -27,23 +27,21 @@ export default function BOHInvoices() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   )
 
-  const BOH_CATEGORIES = [
-    { key: 'proteins', label: 'Proteins' },
-    { key: 'produce', label: 'Produce' },
-    { key: 'dairy', label: 'Dairy' },
-    { key: 'dry_goods', label: 'Dry Goods' },
-    { key: 'dry_spices', label: 'Dry Spices' },
-    { key: 'oils_fats', label: 'Oils & Fats' },
-    { key: 'sauces', label: 'Sauces' },
-    { key: 'misc', label: 'Misc' },
-  ]
-
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 768)
     check()
     window.addEventListener('resize', check)
     return () => window.removeEventListener('resize', check)
   }, [])
+
+  const loadData = async (ownerIdToUse) => {
+    const [{ data: invs }, { data: items }] = await Promise.all([
+      supabase.from('invoices').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').order('created_at', { ascending: false }).limit(20),
+      supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').order('name')
+    ])
+    setInvoices(invs || [])
+    setInventoryItems(items || [])
+  }
 
   useEffect(() => {
     if (!ownerId) return
@@ -62,15 +60,6 @@ export default function BOHInvoices() {
     }
     init()
   }, [ownerId])
-
-  const loadData = async (ownerIdToUse) => {
-    const [{ data: invs }, { data: items }] = await Promise.all([
-      supabase.from('invoices').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').order('created_at', { ascending: false }).limit(20),
-      supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh').order('name')
-    ])
-    setInvoices(invs || [])
-    setInventoryItems(items || [])
-  }
 
   const handleFileUpload = async (e) => {
     const file = e.target.files[0]
@@ -110,9 +99,9 @@ export default function BOHInvoices() {
       ...prev,
       line_items: prev.line_items.map((l, i) => i === idx ? {
         ...l,
-        matched_item_id: itemId === '__create__' ? '__create__' : (itemId || null),
-        matched_item_name: itemId === '__create__' ? l.raw_name : (item?.name || null),
-        match_status: itemId === '__create__' ? 'create_new' : (itemId ? 'matched' : 'unmatched')
+        matched_item_id: itemId || null,
+        matched_item_name: item?.name || null,
+        match_status: itemId ? 'matched' : 'unmatched'
       } : l)
     }))
   }
@@ -133,15 +122,13 @@ export default function BOHInvoices() {
       user_id: ownerIdToUse,
       raw_name: line.raw_name,
       item_number: line.item_number || null,
-      matched_item_id: line.matched_item_id === '__create__' ? null : (line.matched_item_id || null),
+      matched_item_id: line.matched_item_id || null,
       qty: parseFloat(line.qty) || 0,
       unit_cost: parseFloat(line.unit_cost) || 0,
       total_cost: parseFloat(line.total_cost) || 0,
       match_confidence: line.match_confidence || 0,
       match_status: line.match_status || 'unmatched',
-      new_category: line.new_category || null,
       case_size: line.case_size || 1,
-      is_create_new: line.matched_item_id === '__create__',
     }))
 
     await supabase.from('invoice_lines').delete().eq('invoice_id', scanResult.invoice_id)
@@ -154,14 +141,15 @@ export default function BOHInvoices() {
     setView('hub')
   }
 
-  // Step 2: Approve — read saved lines and write to inventory
+  // Approve — this is a record-keeping step only. It does NOT touch on_hand or unit_cost;
+  // receiving confirmation is the source of truth for inventory. This just marks the invoice
+  // reviewed and keeps item_aliases fresh so future scans match better.
   const approveInvoice = async (invoiceId) => {
     setApproving(true)
     setApprovingId(invoiceId)
     const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerId || session.user.id
+    const ownerIdToUse = ownerIdResolved || session.user.id
 
-    const { data: invoice } = await supabase.from('invoices').select('*').eq('id', invoiceId).single()
     const { data: lines } = await supabase.from('invoice_lines').select('*').eq('invoice_id', invoiceId)
 
     if (!lines || lines.length === 0) {
@@ -171,51 +159,12 @@ export default function BOHInvoices() {
       return
     }
 
-    const { data: freshItems } = await supabase.from('inventory_items').select('*').eq('user_id', ownerIdToUse).eq('area', 'boh')
-    const itemsMap = {}
-    ;(freshItems || []).forEach(i => { itemsMap[i.id] = i })
-
     for (const line of lines) {
-      if (line.is_create_new) {
-        const unitCost = line.case_size > 1 ? (parseFloat(line.unit_cost) || 0) / (line.case_size || 1) : (parseFloat(line.unit_cost) || 0)
-        const qtyOnHand = (parseFloat(line.qty) || 0) * (line.case_size || 1)
-        const { data: newItem } = await supabase.from('inventory_items').insert({
-          user_id: ownerIdToUse, name: line.raw_name, category: line.new_category || 'misc',
-          item_type: 'unit', on_hand: qtyOnHand, unit: line.unit || 'unit',
-          unit_cost: unitCost, item_number: line.item_number || null,
-          par: 0, on_menu: false, area: 'boh',
-          last_invoice_date: invoice?.invoice_date || new Date().toISOString().split('T')[0]
-        }).select().single()
-        if (!newItem) continue
-        await supabase.from('invoice_lines').update({ matched_item_id: newItem.id, match_status: 'matched' }).eq('id', line.id)
-        await supabase.from('inventory_history').insert({
-          user_id: ownerIdToUse, inventory_item_id: newItem.id, item_name: newItem.name,
-          category: newItem.category, area: 'boh', event_type: 'invoice', event_id: invoiceId,
-          quantity_before: 0, quantity_change: qtyOnHand, quantity_after: qtyOnHand,
-          unit_cost_at_time: unitCost, total_value_at_time: qtyOnHand * unitCost
-        })
-        await supabase.from('item_aliases').upsert({ user_id: ownerIdToUse, raw_name: line.raw_name.toLowerCase(), inventory_item_id: newItem.id, source: 'auto' }, { onConflict: 'user_id,raw_name' })
-      } else if (line.matched_item_id) {
-        const invItem = itemsMap[line.matched_item_id]
-        if (!invItem) continue
-        const qtyChange = (parseFloat(line.qty) || 0) * (line.case_size || 1)
-        const newOnHand = (parseFloat(invItem.on_hand) || 0) + qtyChange
-        const newUnitCost = line.unit_cost
-          ? (line.case_size > 1 ? (parseFloat(line.unit_cost) || 0) / (line.case_size || 1) : parseFloat(line.unit_cost))
-          : invItem.unit_cost
-        await supabase.from('inventory_items').update({
-          on_hand: newOnHand, unit_cost: newUnitCost,
-          last_invoice_date: invoice?.invoice_date || new Date().toISOString().split('T')[0]
-        }).eq('id', invItem.id)
-        await supabase.from('inventory_history').insert({
-          user_id: ownerIdToUse, inventory_item_id: invItem.id, item_name: invItem.name,
-          category: invItem.category, area: 'boh', event_type: 'invoice', event_id: invoiceId,
-          quantity_before: parseFloat(invItem.on_hand) || 0, quantity_change: qtyChange,
-          quantity_after: newOnHand, unit_cost_at_time: newUnitCost, total_value_at_time: newOnHand * newUnitCost
-        })
-        if (line.raw_name) {
-          await supabase.from('item_aliases').upsert({ user_id: ownerIdToUse, raw_name: line.raw_name.toLowerCase(), inventory_item_id: invItem.id, source: 'manual' }, { onConflict: 'user_id,raw_name' })
-        }
+      if (line.matched_item_id && line.raw_name) {
+        await supabase.from('item_aliases').upsert(
+          { user_id: ownerIdToUse, raw_name: line.raw_name.toLowerCase(), inventory_item_id: line.matched_item_id, source: 'manual' },
+          { onConflict: 'user_id,raw_name' }
+        )
       }
     }
 
@@ -267,7 +216,7 @@ export default function BOHInvoices() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', gap: '12px' }}>
               <div>
                 <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>BOH Invoice Scanning</h1>
-                {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Scan a vendor invoice, review the lines, then approve to update kitchen inventory.</p>}
+                {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Scan a vendor invoice, review the lines, then approve to keep it on record. Receiving confirmation is what updates kitchen inventory.</p>}
               </div>
               <label style={{ background: '#333', color: '#fff', border: 'none', padding: isMobile ? '8px 12px' : '10px 20px', borderRadius: '8px', fontSize: isMobile ? '12px' : '13px', fontWeight: '600', cursor: scanning ? 'not-allowed' : 'pointer', display: 'inline-block', opacity: scanning ? 0.7 : 1, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {scanning ? '⏳ Scanning...' : '📄 Scan Invoice'}
@@ -281,8 +230,8 @@ export default function BOHInvoices() {
                 {[
                   { step: '1', label: 'Upload', desc: 'Photo or PDF of your vendor invoice' },
                   { step: '2', label: 'Scan', desc: 'Claude reads every line item automatically' },
-                  { step: '3', label: 'Review', desc: 'Match items and save — no inventory changes yet' },
-                  { step: '4', label: 'Approve', desc: 'Hit Approve to update on hand quantities' },
+                  { step: '3', label: 'Review', desc: 'Match items and save — this is for your records' },
+                  { step: '4', label: 'Approve', desc: 'Hit Approve to mark it reviewed' },
                 ].map(s => (
                   <div key={s.step} style={{ textAlign: 'center' }}>
                     <div style={{ width: '28px', height: '28px', background: '#185FA5', color: '#fff', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', fontWeight: '700', margin: '0 auto 6px' }}>{s.step}</div>
@@ -410,14 +359,13 @@ export default function BOHInvoices() {
             </div>
 
             <div style={{ background: '#fffbe6', border: '1px solid #f0d060', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', fontSize: '12px', color: '#a07800' }}>
-              💡 Review and match items below, then hit <strong>Save for Approval</strong>. Inventory won't update until you hit <strong>Approve</strong> on the hub.
+              💡 Review and match items below, then hit <strong>Save for Approval</strong>. This is a record for your books — receiving confirmation is what updates kitchen inventory.
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2,1fr)' : 'repeat(4,1fr)', gap: '10px', marginBottom: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '10px', marginBottom: '16px' }}>
               {[
                 { label: 'Line Items', val: scanResult.line_items?.length || 0 },
                 { label: 'Matched', val: scanResult.line_items?.filter(l => l.match_status === 'matched' || l.match_status === 'low_confidence').length || 0, color: '#3B6D11' },
-                { label: 'Create New', val: scanResult.line_items?.filter(l => l.match_status === 'create_new').length || 0, color: '#185FA5' },
                 { label: 'Unmatched', val: scanResult.line_items?.filter(l => l.match_status === 'unmatched').length || 0, color: '#E24B4A' },
               ].map(s => (
                 <div key={s.label} style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '10px', padding: isMobile ? '12px 10px' : '14px 16px', textAlign: 'center' }}>
@@ -430,11 +378,11 @@ export default function BOHInvoices() {
             {isMobile ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                 {(scanResult.line_items || []).map((line, idx) => (
-                  <div key={idx} style={{ background: line.match_status === 'create_new' ? '#f0f8ff' : line.match_status === 'matched' ? '#f9fff5' : '#fff', border: `1px solid ${line.match_status === 'create_new' ? '#b5d4f4' : line.match_status === 'matched' ? '#97C459' : '#e8e8e8'}`, borderRadius: '12px', padding: '14px 16px' }}>
+                  <div key={idx} style={{ background: line.match_status === 'matched' ? '#f9fff5' : '#fff', border: `1px solid ${line.match_status === 'matched' ? '#97C459' : '#e8e8e8'}`, borderRadius: '12px', padding: '14px 16px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                       <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{line.raw_name}</div>
                       <span style={{ fontSize: '11px', fontWeight: '500', color: matchColor(line.match_status), flexShrink: 0, marginLeft: '8px' }}>
-                        {line.match_status === 'matched' ? '✓' : line.match_status === 'create_new' ? '+ New' : line.match_status === 'low_confidence' ? '⚠' : '✗'}
+                        {line.match_status === 'matched' ? '✓' : line.match_status === 'low_confidence' ? '⚠' : '✗'}
                       </span>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '8px', marginBottom: '10px' }}>
@@ -455,30 +403,10 @@ export default function BOHInvoices() {
                     <div>
                       <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Match to BOH Inventory</div>
                       <select value={line.matched_item_id || ''} onChange={e => updateLineMatch(idx, e.target.value || null)}
-                        style={{ width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '8px', fontSize: '16px', color: '#000', marginBottom: '6px' }}>
+                        style={{ width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '8px', fontSize: '16px', color: '#000' }}>
                         <option value="">-- No match --</option>
-                        <option value="__create__">+ Create new item</option>
                         {inventoryItems.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
                       </select>
-                      {line.match_status === 'create_new' && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <select value={line.new_category || 'misc'} onChange={e => setScanResult(prev => ({ ...prev, line_items: prev.line_items.map((l, i) => i === idx ? { ...l, new_category: e.target.value } : l) }))}
-                            style={{ width: '100%', background: '#E6F1FB', border: '1px solid #85B7EB', borderRadius: '6px', padding: '8px', fontSize: '16px', color: '#0C447C' }}>
-                            {BOH_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                          </select>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <input type="number" min="1" placeholder="Case size" value={line.case_size || ''}
-                              onChange={e => setScanResult(prev => ({ ...prev, line_items: prev.line_items.map((l, i) => i === idx ? { ...l, case_size: parseInt(e.target.value) || 1 } : l) }))}
-                              style={{ flex: 1, background: '#E6F1FB', border: '1px solid #85B7EB', borderRadius: '6px', padding: '8px', fontSize: '16px', color: '#0C447C', boxSizing: 'border-box' }} />
-                            <span style={{ fontSize: '11px', color: '#5a9fd4', whiteSpace: 'nowrap' }}>units/case</span>
-                          </div>
-                          {line.case_size > 1 && (
-                            <div style={{ fontSize: '11px', color: '#185FA5', background: '#ddeeff', borderRadius: '4px', padding: '4px 8px' }}>
-                              {line.qty} × {line.case_size} = <strong>{(parseFloat(line.qty) || 0) * line.case_size} units</strong>
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -493,7 +421,7 @@ export default function BOHInvoices() {
                   </thead>
                   <tbody>
                     {(scanResult.line_items || []).map((line, idx) => (
-                      <tr key={idx} style={{ borderBottom: '1px solid #f5f5f5', background: line.match_status === 'create_new' ? '#f0f8ff' : line.match_status === 'matched' ? '#f9fff5' : 'transparent' }}>
+                      <tr key={idx} style={{ borderBottom: '1px solid #f5f5f5', background: line.match_status === 'matched' ? '#f9fff5' : 'transparent' }}>
                         <td style={{ padding: '10px 14px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{line.raw_name}</td>
                         <td style={{ padding: '8px 14px' }}>
                           <input type="number" step="0.01" min="0" value={line.qty || ''} onChange={e => updateLineQty(idx, e.target.value)}
@@ -502,37 +430,15 @@ export default function BOHInvoices() {
                         <td style={{ padding: '10px 14px', color: '#555', fontSize: '13px' }}>{line.unit_cost ? fmt(line.unit_cost) : '--'}</td>
                         <td style={{ padding: '10px 14px', fontWeight: '500', color: '#000', fontSize: '13px' }}>{line.total_cost ? fmt(line.total_cost) : '--'}</td>
                         <td style={{ padding: '8px 14px' }}>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxWidth: '260px' }}>
-                            <select value={line.matched_item_id || ''} onChange={e => updateLineMatch(idx, e.target.value || null)}
-                              style={{ width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#000' }}>
-                              <option value="">-- No match --</option>
-                              <option value="__create__">+ Create new item</option>
-                              {inventoryItems.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-                            </select>
-                            {line.match_status === 'create_new' && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                <select value={line.new_category || 'misc'} onChange={e => setScanResult(prev => ({ ...prev, line_items: prev.line_items.map((l, i) => i === idx ? { ...l, new_category: e.target.value } : l) }))}
-                                  style={{ width: '100%', background: '#E6F1FB', border: '1px solid #85B7EB', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#0C447C' }}>
-                                  {BOH_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                                </select>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <input type="number" min="1" placeholder="Case size" value={line.case_size || ''}
-                                    onChange={e => setScanResult(prev => ({ ...prev, line_items: prev.line_items.map((l, i) => i === idx ? { ...l, case_size: parseInt(e.target.value) || 1 } : l) }))}
-                                    style={{ width: '100%', background: '#E6F1FB', border: '1px solid #85B7EB', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#0C447C' }} />
-                                  <span style={{ fontSize: '10px', color: '#5a9fd4', whiteSpace: 'nowrap' }}>units/case</span>
-                                </div>
-                                {line.case_size > 1 && (
-                                  <div style={{ fontSize: '10px', color: '#185FA5', background: '#ddeeff', borderRadius: '4px', padding: '3px 6px' }}>
-                                    {line.qty} × {line.case_size} = <strong>{(parseFloat(line.qty) || 0) * line.case_size} units</strong>
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
+                          <select value={line.matched_item_id || ''} onChange={e => updateLineMatch(idx, e.target.value || null)}
+                            style={{ width: '100%', maxWidth: '260px', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px 8px', fontSize: '12px', color: '#000' }}>
+                            <option value="">-- No match --</option>
+                            {inventoryItems.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+                          </select>
                         </td>
                         <td style={{ padding: '10px 14px' }}>
                           <span style={{ fontSize: '11px', fontWeight: '500', color: matchColor(line.match_status) }}>
-                            {line.match_status === 'matched' ? '✓ Matched' : line.match_status === 'create_new' ? '+ New item' : line.match_status === 'low_confidence' ? '⚠ Low confidence' : '✗ Unmatched'}
+                            {line.match_status === 'matched' ? '✓ Matched' : line.match_status === 'low_confidence' ? '⚠ Low confidence' : '✗ Unmatched'}
                           </span>
                         </td>
                       </tr>
@@ -553,7 +459,7 @@ export default function BOHInvoices() {
             )}
 
             <div style={{ marginTop: '12px', fontSize: '12px', color: '#aaa' }}>
-              Saving does not update inventory. Return to the hub and hit Approve when you're ready to apply the changes.
+              Saving keeps this as a record but does not touch inventory. Receiving confirmation is what updates kitchen inventory — approving here just marks the invoice reviewed.
             </div>
           </>
         )}

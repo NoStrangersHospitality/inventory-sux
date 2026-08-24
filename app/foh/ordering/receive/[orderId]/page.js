@@ -34,11 +34,15 @@ export default function ReceiveOrder() {
     ])
     if (!orderData) { router.push('/foh/ordering'); return }
     setOrder(orderData)
-    setLines((lineData || []).map(l => ({
-      ...l,
-      received: true,
-      received_qty: l.final_qty
-    })))
+    setLines((lineData || []).map(l => {
+      const resolved = !!l.receiving_status
+      return {
+        ...l,
+        resolved,
+        received: resolved ? l.receiving_status !== 'missing' : true,
+        received_qty: resolved ? (l.received_qty ?? 0) : l.final_qty
+      }
+    }))
 
     // Build receiving map by distributor_name
     const recMap = {}
@@ -80,48 +84,93 @@ export default function ReceiveOrder() {
   }, [params.orderId])
 
   const toggleLine = (id) => {
-    setLines(prev => prev.map(l => l.id === id ? { ...l, received: !l.received, received_qty: !l.received ? l.final_qty : 0 } : l))
+    setLines(prev => prev.map(l => (l.id === id && !l.resolved) ? { ...l, received: !l.received, received_qty: !l.received ? l.final_qty : 0 } : l))
   }
 
   const updateQty = (id, qty) => {
-    setLines(prev => prev.map(l => l.id === id ? { ...l, received_qty: qty } : l))
+    setLines(prev => prev.map(l => (l.id === id && !l.resolved) ? { ...l, received_qty: qty } : l))
   }
 
-  const confirmDistributor = async (distName, status) => {
-    if (status === 'rejected' && !confirm(`Reject the entire delivery from ${distName}?`)) return
+  // mode: 'all' = receive every open line at full ordered qty
+  //       'shown' = only the currently-checked open lines; unchecked lines are left untouched (still open)
+  //       'reject' = mark every remaining open line as missing, no inventory write
+  const confirmDistributor = async (distName, mode) => {
+    if (mode === 'reject' && !confirm(`Mark all remaining open items from ${distName} as missing? This won't add anything to inventory.`)) return
     setSubmitting(distName)
 
     const distLines = lines.filter(l => (l.distributor_name || 'Unassigned') === distName)
-    const resolvedLines = status === 'received'
-      ? distLines.map(l => ({ ...l, received: true, received_qty: l.final_qty }))
-      : status === 'rejected'
-      ? distLines.map(l => ({ ...l, received: false, received_qty: 0 }))
-      : distLines
+    const openLines = distLines.filter(l => !l.resolved)
 
-    // Update order_lines status — no on_hand writes
-    for (const line of resolvedLines) {
-      const lineStatus = !line.received ? 'missing'
-        : parseFloat(line.received_qty) < parseFloat(line.final_qty) ? 'short'
-        : 'received'
-      await supabase.from('order_lines').update({
-        received_qty: parseFloat(line.received_qty) || 0,
-        receiving_status: lineStatus
-      }).eq('id', line.id)
+    const toProcess = openLines
+      .map(l => mode === 'all' ? { ...l, received: true, received_qty: l.final_qty }
+        : mode === 'reject' ? { ...l, received: false, received_qty: 0 }
+        : l)
+      .filter(l => mode === 'shown' ? l.received : true)
+
+    if (toProcess.length === 0) { setSubmitting(null); return }
+
+    const { data: { session } } = await supabase.auth.getSession()
+
+    // Pull current on_hand for anything we're about to write
+    const itemIds = [...new Set(toProcess.filter(l => l.received && parseFloat(l.received_qty) > 0 && l.item_id).map(l => l.item_id))]
+    let itemsMap = {}
+    if (itemIds.length > 0) {
+      const { data: items } = await supabase.from('inventory_items').select('*').in('id', itemIds)
+      ;(items || []).forEach(i => { itemsMap[i.id] = i })
     }
 
-    // Update order_receiving row
-    const recRow = receiving[distName]
-    const { data: updatedRec } = await supabase.from('order_receiving').update({
-      status,
-      confirmed_at: new Date().toISOString(),
-      is_reopened: false
-    }).eq('id', recRow.id).select().single()
+    for (const line of toProcess) {
+      const qty = parseFloat(line.received_qty) || 0
+      const lineStatus = !line.received ? 'missing' : qty < parseFloat(line.final_qty) ? 'short' : 'received'
 
-    // Update local receiving state
+      await supabase.from('order_lines').update({
+        received_qty: qty,
+        receiving_status: lineStatus
+      }).eq('id', line.id)
+
+      if (line.received && qty > 0 && line.item_id && itemsMap[line.item_id]) {
+        const item = itemsMap[line.item_id]
+        const before = parseFloat(item.on_hand) || 0
+        const after = before + qty
+        await supabase.from('inventory_items').update({ on_hand: after }).eq('id', item.id)
+        await supabase.from('inventory_history').insert({
+          user_id: session.user.id, inventory_item_id: item.id, item_name: item.name,
+          category: item.category, area: order.area || 'foh', event_type: 'receiving', event_id: order.id,
+          quantity_before: before, quantity_change: qty, quantity_after: after,
+          unit_cost_at_time: item.unit_cost || 0, total_value_at_time: after * (item.unit_cost || 0)
+        })
+        itemsMap[item.id] = { ...item, on_hand: after }
+      }
+    }
+
+    // Update local line state
+    const processedById = {}
+    toProcess.forEach(l => { processedById[l.id] = l })
+    const newLines = lines.map(l => processedById[l.id]
+      ? { ...l, resolved: true, received: processedById[l.id].received, received_qty: parseFloat(processedById[l.id].received_qty) || 0 }
+      : l)
+    setLines(newLines)
+
+    // A distributor only closes once every one of its lines is resolved
+    const distNewLines = newLines.filter(l => (l.distributor_name || 'Unassigned') === distName)
+    const stillOpen = distNewLines.some(l => !l.resolved)
+    const recRow = receiving[distName]
+    let updatedRec = recRow
+
+    if (!stillOpen) {
+      const finalStatus = distNewLines.every(l => l.received) ? 'received'
+        : distNewLines.some(l => l.received) ? 'partial'
+        : 'rejected'
+      const { data } = await supabase.from('order_receiving').update({
+        status: finalStatus, confirmed_at: new Date().toISOString(), is_reopened: false
+      }).eq('id', recRow.id).select().single()
+      updatedRec = data
+    }
+
     const newReceiving = { ...receiving, [distName]: updatedRec }
     setReceiving(newReceiving)
 
-    // Check if all distributors are now confirmed — if so close the order
+    // Check if all distributors are now fully resolved — if so close the order
     const allDone = Object.values(newReceiving).every(r => r.status !== 'pending')
     if (allDone) {
       const overallStatus = Object.values(newReceiving).every(r => r.status === 'received') ? 'received'
@@ -139,13 +188,47 @@ export default function ReceiveOrder() {
   }
 
   const reopenDistributor = async (distName) => {
+    if (!confirm(`Reopen ${distName}'s delivery? This undoes the inventory it already added so you can re-confirm.`)) return
+
     const recRow = receiving[distName]
+    const distLines = lines.filter(l => (l.distributor_name || 'Unassigned') === distName && l.resolved)
+
+    const { data: { session } } = await supabase.auth.getSession()
+    const itemIds = [...new Set(distLines.filter(l => l.received && parseFloat(l.received_qty) > 0 && l.item_id).map(l => l.item_id))]
+    let itemsMap = {}
+    if (itemIds.length > 0) {
+      const { data: items } = await supabase.from('inventory_items').select('*').in('id', itemIds)
+      ;(items || []).forEach(i => { itemsMap[i.id] = i })
+    }
+
+    for (const line of distLines) {
+      if (line.received && parseFloat(line.received_qty) > 0 && line.item_id && itemsMap[line.item_id]) {
+        const item = itemsMap[line.item_id]
+        const before = parseFloat(item.on_hand) || 0
+        const qty = parseFloat(line.received_qty) || 0
+        const after = before - qty
+        await supabase.from('inventory_items').update({ on_hand: after }).eq('id', item.id)
+        await supabase.from('inventory_history').insert({
+          user_id: session.user.id, inventory_item_id: item.id, item_name: item.name,
+          category: item.category, area: order.area || 'foh', event_type: 'receiving_reversal', event_id: order.id,
+          quantity_before: before, quantity_change: -qty, quantity_after: after,
+          unit_cost_at_time: item.unit_cost || 0, total_value_at_time: after * (item.unit_cost || 0)
+        })
+        itemsMap[item.id] = { ...item, on_hand: after }
+      }
+      await supabase.from('order_lines').update({ receiving_status: null, received_qty: null }).eq('id', line.id)
+    }
+
     const { data: updatedRec } = await supabase.from('order_receiving').update({
       status: 'pending',
       confirmed_at: null,
       is_reopened: true
     }).eq('id', recRow.id).select().single()
     setReceiving(prev => ({ ...prev, [distName]: updatedRec }))
+
+    setLines(prev => prev.map(l => (l.distributor_name || 'Unassigned') === distName
+      ? { ...l, resolved: false, received: true, received_qty: l.final_qty }
+      : l))
 
     // Also reopen order if it was closed
     await supabase.from('orders').update({ receiving_status: 'pending', received_at: null }).eq('id', order.id)
@@ -217,7 +300,7 @@ export default function ReceiveOrder() {
         </div>
 
         <div style={{ background: '#f0f8ff', border: '1px solid #b5d4f4', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', fontSize: '12px', color: '#185FA5' }}>
-          💡 Confirm each distributor&apos;s delivery separately. Inventory updates when you scan the invoice — this just tracks what arrived.
+          💡 Confirming an item here updates on-hand inventory right away. Leave an item unchecked to keep it open — it&apos;ll stay editable until you come back and confirm it.
         </div>
 
         {/* Distributor sections */}
@@ -252,43 +335,48 @@ export default function ReceiveOrder() {
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: isConfirmed ? '0 0 10px 10px' : '0', overflow: 'hidden' }}>
                 {isMobile ? (
                   distLines.map(line => (
-                    <div key={line.id} style={{ padding: '14px 16px', borderBottom: '1px solid #f5f5f5', background: !line.received ? '#fff8f8' : 'transparent', opacity: isConfirmed ? 0.7 : 1 }}>
+                    <div key={line.id} style={{ padding: '14px 16px', borderBottom: '1px solid #f5f5f5', background: !line.received ? '#fff8f8' : 'transparent', opacity: line.resolved ? 0.7 : 1 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flex: 1 }}>
-                          <input type="checkbox" checked={line.received} onChange={() => !isConfirmed && toggleLine(line.id)}
-                            disabled={isConfirmed}
-                            style={{ width: '20px', height: '20px', cursor: isConfirmed ? 'default' : 'pointer', accentColor: '#F5B800', flexShrink: 0 }} />
+                          <input type="checkbox" checked={line.received} onChange={() => toggleLine(line.id)}
+                            disabled={line.resolved}
+                            style={{ width: '20px', height: '20px', cursor: line.resolved ? 'default' : 'pointer', accentColor: '#F5B800', flexShrink: 0 }} />
                           <div>
                             <div style={{ fontSize: '14px', fontWeight: '500', color: line.received ? '#000' : '#aaa' }}>{line.item_name}</div>
                             <div style={{ fontSize: '11px', color: '#aaa', marginTop: '2px' }}>Ordered: {line.final_qty} {line.unit || ''}</div>
                           </div>
                         </div>
+                        {line.resolved && (
+                          <span style={{ fontSize: '11px', fontWeight: '600', color: line.received ? '#3B6D11' : '#E24B4A' }}>
+                            {line.received ? '✓ Received' : '✗ Missing'}
+                          </span>
+                        )}
                       </div>
                       {line.received && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', paddingLeft: '30px' }}>
                           <label style={{ fontSize: '12px', color: '#aaa', whiteSpace: 'nowrap' }}>Qty received:</label>
                           <input type="number" min="0" step="0.1" value={line.received_qty === 0 ? '' : line.received_qty}
-                            onChange={e => !isConfirmed && updateQty(line.id, parseFloat(e.target.value) || 0)}
-                            disabled={isConfirmed}
+                            onChange={e => updateQty(line.id, parseFloat(e.target.value) || 0)}
+                            disabled={line.resolved}
                             style={{ flex: 1, background: parseFloat(line.received_qty) < parseFloat(line.final_qty) ? '#FAEEDA' : '#fffbe6', border: `1px solid ${parseFloat(line.received_qty) < parseFloat(line.final_qty) ? '#f0c080' : '#F5B800'}`, borderRadius: '8px', padding: '8px 12px', fontSize: '16px', color: '#000', fontWeight: '600' }} />
                         </div>
                       )}
-                      {!line.received && <div style={{ paddingLeft: '30px', fontSize: '12px', color: '#E24B4A', fontWeight: '500' }}>Not received</div>}
+                      {!line.received && !line.resolved && <div style={{ paddingLeft: '30px', fontSize: '12px', color: '#aaa', fontWeight: '500' }}>Not yet delivered — stays open</div>}
                     </div>
                   ))
                 ) : (
                   <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                     <thead>
-                      <tr>{['', 'Item', 'Unit', 'Ordered', 'Received Qty'].map((h, i) => (
-                        <th key={i} style={{ textAlign: i > 2 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.4px', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
+                      <tr>{['', 'Item', 'Unit', 'Ordered', 'Received Qty', ''].map((h, i) => (
+                        <th key={i} style={{ textAlign: i > 2 && i < 5 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '0.4px', padding: '10px 14px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                       ))}</tr>
                     </thead>
                     <tbody>
                       {distLines.map(line => (
-                        <tr key={line.id} style={{ borderBottom: '1px solid #f5f5f5', background: !line.received ? '#fff8f8' : 'transparent', opacity: isConfirmed ? 0.7 : 1 }}>
+                        <tr key={line.id} style={{ borderBottom: '1px solid #f5f5f5', background: !line.received ? '#fff8f8' : 'transparent', opacity: line.resolved ? 0.7 : 1 }}>
                           <td style={{ padding: '10px 14px', width: '40px' }}>
-                            <input type="checkbox" checked={line.received} onChange={() => !isConfirmed && toggleLine(line.id)} disabled={isConfirmed}
-                              style={{ width: '16px', height: '16px', cursor: isConfirmed ? 'default' : 'pointer', accentColor: '#F5B800' }} />
+                            <input type="checkbox" checked={line.received} onChange={() => toggleLine(line.id)} disabled={line.resolved}
+                              style={{ width: '16px', height: '16px', cursor: line.resolved ? 'default' : 'pointer', accentColor: '#F5B800' }} />
                           </td>
                           <td style={{ padding: '10px 14px', fontWeight: '500', color: line.received ? '#000' : '#aaa', fontSize: '13px' }}>{line.item_name}</td>
                           <td style={{ padding: '10px 14px', color: '#aaa', fontSize: '12px' }}>{line.unit || '--'}</td>
@@ -296,11 +384,18 @@ export default function ReceiveOrder() {
                           <td style={{ padding: '8px 14px', textAlign: 'right' }}>
                             {line.received ? (
                               <input type="number" min="0" step="0.1" value={line.received_qty === 0 ? '' : line.received_qty}
-                                onChange={e => !isConfirmed && updateQty(line.id, parseFloat(e.target.value) || 0)}
-                                disabled={isConfirmed}
+                                onChange={e => updateQty(line.id, parseFloat(e.target.value) || 0)}
+                                disabled={line.resolved}
                                 style={{ width: '80px', background: parseFloat(line.received_qty) < parseFloat(line.final_qty) ? '#FAEEDA' : '#fffbe6', border: `1px solid ${parseFloat(line.received_qty) < parseFloat(line.final_qty) ? '#f0c080' : '#F5B800'}`, borderRadius: '8px', padding: '6px 10px', fontSize: '13px', color: '#000', textAlign: 'right', fontWeight: '600' }} />
-                            ) : (
-                              <span style={{ fontSize: '12px', color: '#E24B4A', fontWeight: '500' }}>Not received</span>
+                            ) : !line.resolved ? (
+                              <span style={{ fontSize: '12px', color: '#aaa', fontWeight: '500' }}>Not yet</span>
+                            ) : null}
+                          </td>
+                          <td style={{ padding: '10px 14px', textAlign: 'left' }}>
+                            {line.resolved && (
+                              <span style={{ fontSize: '11px', fontWeight: '600', color: line.received ? '#3B6D11' : '#E24B4A' }}>
+                                {line.received ? '✓' : '✗ Missing'}
+                              </span>
                             )}
                           </td>
                         </tr>
@@ -310,29 +405,29 @@ export default function ReceiveOrder() {
                 )}
               </div>
 
-              {/* Per-distributor action buttons */}
+              {/* Per-distributor action buttons — only shown while at least one line is still open */}
               {!isConfirmed && (
                 <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderTop: 'none', borderRadius: '0 0 10px 10px', padding: isMobile ? '14px' : '16px 20px' }}>
                   <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '10px', textAlign: 'center' }}>
                     How did {distName}&apos;s delivery go?
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: isMobile ? '8px' : '12px' }}>
-                    <button onClick={() => confirmDistributor(distName, 'rejected')} disabled={!!isSubmitting}
+                    <button onClick={() => confirmDistributor(distName, 'reject')} disabled={!!isSubmitting}
                       style={{ background: '#fff', color: '#E24B4A', border: '2px solid #E24B4A', padding: isMobile ? '10px 6px' : '12px', borderRadius: '10px', fontSize: isMobile ? '12px' : '13px', fontWeight: '700', cursor: isSubmitting ? 'not-allowed' : 'pointer' }}>
-                      🔴 {isMobile ? 'Reject' : 'Reject All'}
+                      🔴 {isMobile ? 'Reject Rest' : 'Reject Remaining'}
                     </button>
-                    <button onClick={() => confirmDistributor(distName, lines.every(l => (l.distributor_name || 'Unassigned') !== distName || l.received) ? 'partial' : 'partial')} disabled={!!isSubmitting}
+                    <button onClick={() => confirmDistributor(distName, 'shown')} disabled={!!isSubmitting}
                       style={{ background: '#F5B800', color: '#000', border: '2px solid #F5B800', padding: isMobile ? '10px 6px' : '12px', borderRadius: '10px', fontSize: isMobile ? '12px' : '13px', fontWeight: '700', cursor: isSubmitting ? 'not-allowed' : 'pointer' }}>
                       🟡 {isMobile ? 'Confirm' : 'Confirm As Shown'}
                     </button>
-                    <button onClick={() => confirmDistributor(distName, 'received')} disabled={!!isSubmitting}
+                    <button onClick={() => confirmDistributor(distName, 'all')} disabled={!!isSubmitting}
                       style={{ background: '#3B6D11', color: '#fff', border: '2px solid #3B6D11', padding: isMobile ? '10px 6px' : '12px', borderRadius: '10px', fontSize: isMobile ? '12px' : '13px', fontWeight: '700', cursor: isSubmitting ? 'not-allowed' : 'pointer' }}>
                       🟢 {isMobile ? 'All In' : 'All Received'}
                     </button>
                   </div>
                   {!isMobile && (
                     <div style={{ fontSize: '11px', color: '#aaa', textAlign: 'center', marginTop: '8px' }}>
-                      🟢 all items received at ordered quantities · 🟡 confirms what you&apos;ve checked above · 🔴 rejects this delivery
+                      🟢 receives every open item at ordered qty · 🟡 receives only what&apos;s checked above and leaves the rest open · 🔴 gives up on whatever&apos;s still open, marks it missing
                     </div>
                   )}
                 </div>
