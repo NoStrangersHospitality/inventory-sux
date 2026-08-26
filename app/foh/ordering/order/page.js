@@ -577,7 +577,7 @@ function Order() {
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
-                              <input type="number" min="0" defaultValue={parseFloat(row.par) || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                              <input type="number" min="0" value={parseFloat(row.par) || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
                                 style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
@@ -615,7 +615,7 @@ function Order() {
                                 {avg !== null ? avg.toFixed(1) : '--'}
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" defaultValue={parseFloat(row.par) || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                <input type="number" min="0" value={parseFloat(row.par) || 0} onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
                                   style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
