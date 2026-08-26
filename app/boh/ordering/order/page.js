@@ -20,14 +20,6 @@ function BOHOrder() {
   const [readyOrder, setReadyOrder] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
   const [orderHistory, setOrderHistory] = useState({})
-  const [showAddItemModal, setShowAddItemModal] = useState(false)
-  const [addItemSearchTerm, setAddItemSearchTerm] = useState('')
-  const [availableToAdd, setAvailableToAdd] = useState([])
-  const [addItemStep, setAddItemStep] = useState('search')
-  const [newItemForm, setNewItemForm] = useState({
-    name: '', category: 'proteins', item_type: 'weight', unit: 'lb',
-    unit_cost: '', par: '', distributor_id: '', notes: '', on_hand: 0, on_menu: true
-  })
   const router = useRouter()
   const searchParams = useSearchParams()
   const { can, ownerId } = useRole()
@@ -48,15 +40,6 @@ function BOHOrder() {
     { key: 'sauces', label: 'Sauces', icon: '🥫' },
     { key: 'misc', label: 'Misc', icon: '📦' },
   ]
-
-  const ITEM_TYPES = ['weight', 'volume', 'unit', 'case']
-
-  const UNITS_BY_TYPE = {
-    weight: ['lb', 'oz', 'kg', 'g'],
-    volume: ['gal', 'qt', 'pt', 'fl oz', 'L', 'ml'],
-    unit: ['each', 'dozen', 'bunch', 'head'],
-    case: ['case', 'flat', 'tray'],
-  }
 
   const getDefaultUnit = (item) => {
     if (item.item_type === 'case') return 'case'
@@ -359,166 +342,6 @@ function BOHOrder() {
     })
   }
 
-  const openAddItemModal = () => {
-    setAddItemStep('search')
-    setAddItemSearchTerm('')
-    setAvailableToAdd([])
-    setNewItemForm({
-      name: '', category: 'proteins', item_type: 'weight', unit: 'lb',
-      unit_cost: '', par: '', distributor_id: '', notes: '', on_hand: 0, on_menu: true
-    })
-    setShowAddItemModal(true)
-  }
-
-  const searchItemsToAdd = async (term) => {
-    setAddItemSearchTerm(term)
-    if (!term.trim()) {
-      setAvailableToAdd([])
-      return
-    }
-    const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerId || session.user.id
-    const { data: allItems } = await supabase
-      .from('inventory_items')
-      .select('*')
-      .eq('user_id', ownerIdToUse)
-      .eq('area', 'boh')
-      .ilike('name', `%${term}%`)
-      .limit(10)
-    
-    const itemsInOrder = new Set()
-    Object.keys(orderRows).forEach(vn => {
-      orderRows[vn].forEach(row => {
-        itemsInOrder.add(row.id)
-      })
-    })
-    
-    const filtered = (allItems || []).filter(item => !itemsInOrder.has(item.id))
-    setAvailableToAdd(filtered)
-  }
-
-  const addExistingItem = async (item) => {
-    const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerId || session.user.id
-    if (!item.on_menu) {
-      await supabase.from('inventory_items').update({ on_menu: true }).eq('id', item.id).eq('user_id', ownerIdToUse)
-      item = { ...item, on_menu: true }
-    }
-    
-    const vendorName = item.distributor_id 
-      ? (vendors.find(v => v.id === item.distributor_id)?.name || 'Unassigned')
-      : 'Unassigned'
-    
-    setOrderRows(prev => {
-      const next = { ...prev }
-      if (!next[vendorName]) next[vendorName] = []
-      const catLabel = CATEGORIES.find(c => c.key === item.category)?.label || item.category
-      next[vendorName].push({
-        ...item,
-        catLabel,
-        vendorName,
-        on_hand_count: 0,
-        suggested: Math.max(0, Math.ceil(item.par || 0))
-      })
-      return next
-    })
-    
-    setShowAddItemModal(false)
-  }
-
-  const createNewItem = async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerId || session.user.id
-    
-    if (!newItemForm.name.trim()) {
-      alert('Please enter an item name.')
-      return
-    }
-    
-    const { data: createdItem, error: createError } = await supabase
-      .from('inventory_items')
-      .insert({
-        user_id: ownerIdToUse,
-        area: 'boh',
-        name: newItemForm.name.trim(),
-        category: newItemForm.category,
-        item_type: newItemForm.item_type,
-        unit: newItemForm.unit,
-        unit_cost: parseFloat(newItemForm.unit_cost) || 0,
-        par: parseFloat(newItemForm.par) || 0,
-        on_hand: parseFloat(newItemForm.on_hand) || 0,
-        distributor_id: newItemForm.distributor_id || null,
-        notes: newItemForm.notes || '',
-        on_menu: newItemForm.on_menu
-      })
-      .select()
-      .single()
-    
-    if (createError || !createdItem) {
-      console.error('Create item error:', createError)
-      alert('Failed to create item. Please try again.')
-      return
-    }
-    
-    const vendorName = newItemForm.distributor_id
-      ? (vendors.find(v => v.id === newItemForm.distributor_id)?.name || 'Unassigned')
-      : 'Unassigned'
-    
-    setOrderRows(prev => {
-      const next = { ...prev }
-      if (!next[vendorName]) next[vendorName] = []
-      const catLabel = CATEGORIES.find(c => c.key === createdItem.category)?.label || createdItem.category
-      next[vendorName].push({
-        ...createdItem,
-        catLabel,
-        vendorName,
-        on_hand_count: 0,
-        suggested: Math.max(0, Math.ceil(createdItem.par || 0))
-      })
-      return next
-    })
-    
-    setShowAddItemModal(false)
-  }
-
-  const removeItemFromOrder = async (vendorName, idx) => {
-    const { data: { session } } = await supabase.auth.getSession()
-    const ownerIdToUse = ownerId || session.user.id
-    const row = orderRows[vendorName][idx]
-    
-    await supabase
-      .from('inventory_items')
-      .update({ on_menu: false })
-      .eq('id', row.id)
-      .eq('user_id', ownerIdToUse)
-    
-    setOrderRows(prev => {
-      const next = { ...prev }
-      const rows = [...next[vendorName]]
-      rows.splice(idx, 1)
-      if (rows.length === 0) {
-        delete next[vendorName]
-      } else {
-        next[vendorName] = rows
-      }
-      return next
-    })
-    
-    setRecapRows(prev => {
-      const next = { ...prev }
-      if (next[vendorName]) {
-        const recapIdx = next[vendorName].findIndex(r => r.id === row.id)
-        if (recapIdx >= 0) {
-          next[vendorName].splice(recapIdx, 1)
-          if (next[vendorName].length === 0) {
-            delete next[vendorName]
-          }
-        }
-      }
-      return next
-    })
-  }
-
   const markAsReady = async () => {
     // Guard: never delete existing order_lines and replace with empty set.
     if (Object.keys(recapRows).length === 0) {
@@ -730,7 +553,7 @@ function BOHOrder() {
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
                             <div>
                               <div style={{ fontSize: '10px', color: '#aaa', marginBottom: '4px', textTransform: 'uppercase' }}>Par</div>
-                              <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                              <input type="number" min="0" step="0.01" defaultValue={parseFloat(row.par) || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                 style={{ width: '100%', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '6px', fontSize: '16px', background: '#fafafa' }} />
                             </div>
                             <div>
@@ -748,8 +571,8 @@ function BOHOrder() {
                     ) : (
                       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                         <thead>
-                          <tr>{['Item', 'Category', 'Unit', 'Last 4 Orders', 'Avg', 'Par', 'On Hand', 'Suggested', ''].map((h, i) => (
-                            <th key={i} style={{ textAlign: i > 2 && i < 8 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa', width: i === 8 ? '40px' : 'auto' }}>{h}</th>
+                          <tr>{['Item', 'Category', 'Unit', 'Last 4 Orders', 'Avg', 'Par', 'On Hand', 'Suggested'].map((h, i) => (
+                            <th key={i} style={{ textAlign: i > 2 ? 'center' : 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '8px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>
                           ))}</tr>
                         </thead>
                         <tbody>
@@ -768,7 +591,7 @@ function BOHOrder() {
                                 {avg !== null ? avg.toFixed(1) : '--'}
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <input type="number" min="0" step="0.01" defaultValue={row.par || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
+                                <input type="number" min="0" step="0.01" defaultValue={parseFloat(row.par) || 0} onChange={e => updateRow(vn, ri, 'par', parseFloat(e.target.value) || 0)}
                                   style={{ width: '60px', textAlign: 'center', border: '1px solid #e8e8e8', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fafafa' }} />
                               </td>
                               <td style={{ padding: '6px 8px', textAlign: 'center' }}>
@@ -776,9 +599,6 @@ function BOHOrder() {
                                   style={{ width: '64px', textAlign: 'center', border: '1px solid #F5B800', borderRadius: '6px', padding: '4px', fontSize: '12px', background: '#fffbe6', fontWeight: '500' }} />
                               </td>
                               <td style={{ padding: '8px 10px', textAlign: 'center', fontWeight: '600', color: row.suggested > 0 ? '#3B6D11' : '#ccc', fontSize: '12px' }}>{row.suggested}</td>
-                              <td style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <button onClick={() => removeItemFromOrder(vn, ri)} style={{ background: '#ff4444', color: '#fff', border: 'none', borderRadius: '4px', width: '28px', height: '28px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-                              </td>
                             </tr>
                           )})}
                         </tbody>
@@ -788,10 +608,7 @@ function BOHOrder() {
                 </div>
               )
             })}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 2fr', gap: '10px', marginTop: '8px' }}>
-              <button onClick={openAddItemModal} style={{ background: '#fff', color: '#333', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
-                ➕ Add Item
-              </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px', marginTop: '8px' }}>
               <button onClick={saveDraft} disabled={saving} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '14px', borderRadius: '10px', fontSize: '14px', fontWeight: '600', cursor: saving ? 'not-allowed' : 'pointer' }}>
                 {saving ? 'Saving...' : '💾 Save Draft'}
               </button>
@@ -908,188 +725,6 @@ function BOHOrder() {
               )}
             </div>
           </>
-        )}
-
-        {showAddItemModal && (
-          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-            <div style={{ background: '#fff', borderRadius: '12px', padding: '24px', maxWidth: '550px', width: '90%', maxHeight: '90vh', overflow: 'auto', boxShadow: '0 4px 16px rgba(0,0,0,0.2)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: '600', color: '#000', margin: 0 }}>Add Item to Order</h2>
-                <button onClick={() => setShowAddItemModal(false)} style={{ background: 'none', border: 'none', fontSize: '24px', color: '#999', cursor: 'pointer' }}>✕</button>
-              </div>
-
-              {addItemStep === 'search' && (
-                <>
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Search Existing Items</label>
-                    <input
-                      type="text"
-                      placeholder="Search by name..."
-                      value={addItemSearchTerm}
-                      onChange={e => searchItemsToAdd(e.target.value)}
-                      style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
-                    />
-                  </div>
-
-                  {availableToAdd.length > 0 ? (
-                    <div style={{ background: '#fafafa', borderRadius: '8px', maxHeight: '300px', overflow: 'auto', marginBottom: '16px' }}>
-                      {availableToAdd.map(item => (
-                        <button
-                          key={item.id}
-                          onClick={() => addExistingItem(item)}
-                          style={{ width: '100%', padding: '12px', border: 'none', background: 'none', borderBottom: '1px solid #e8e8e8', textAlign: 'left', cursor: 'pointer', fontSize: '14px', color: '#000', fontWeight: '500', transition: 'background 0.2s' }}
-                          onMouseEnter={e => e.currentTarget.style.background = '#f0f0f0'}
-                          onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                        >
-                          <div style={{ fontWeight: '500' }}>{item.name}</div>
-                          <div style={{ fontSize: '12px', color: '#999', marginTop: '2px' }}>{item.category} • {item.unit} • ${item.unit_cost || '0.00'}</div>
-                        </button>
-                      ))}
-                    </div>
-                  ) : addItemSearchTerm ? (
-                    <div style={{ padding: '16px', textAlign: 'center', color: '#999', fontSize: '13px', marginBottom: '16px' }}>
-                      No matching items found.
-                    </div>
-                  ) : null}
-
-                  <button
-                    onClick={() => setAddItemStep('create')}
-                    style={{ width: '100%', padding: '12px', border: '1px solid #ddd', borderRadius: '8px', background: '#fff', fontSize: '14px', fontWeight: '500', color: '#555', cursor: 'pointer', marginBottom: '8px' }}
-                  >
-                    ➕ Create New Item
-                  </button>
-                </>
-              )}
-
-              {addItemStep === 'create' && (
-                <>
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Item Name *</label>
-                    <input
-                      type="text"
-                      placeholder="e.g., Beef Ribeye"
-                      value={newItemForm.name}
-                      onChange={e => setNewItemForm({ ...newItemForm, name: e.target.value })}
-                      style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
-                    />
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Category</label>
-                      <select
-                        value={newItemForm.category}
-                        onChange={e => setNewItemForm({ ...newItemForm, category: e.target.value })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
-                      >
-                        {CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.label}</option>)}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Item Type</label>
-                      <select
-                        value={newItemForm.item_type}
-                        onChange={e => setNewItemForm({ ...newItemForm, item_type: e.target.value, unit: UNITS_BY_TYPE[e.target.value][0] })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
-                      >
-                        {ITEM_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Unit</label>
-                      <select
-                        value={newItemForm.unit}
-                        onChange={e => setNewItemForm({ ...newItemForm, unit: e.target.value })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
-                      >
-                        {UNITS_BY_TYPE[newItemForm.item_type]?.map(u => <option key={u} value={u}>{u}</option>)}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Unit Cost ($)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="0.00"
-                        value={newItemForm.unit_cost}
-                        onChange={e => setNewItemForm({ ...newItemForm, unit_cost: e.target.value })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Par</label>
-                      <input
-                        type="number"
-                        min="0"
-                        placeholder="0"
-                        value={newItemForm.par}
-                        onChange={e => setNewItemForm({ ...newItemForm, par: e.target.value })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Vendor</label>
-                      <select
-                        value={newItemForm.distributor_id}
-                        onChange={e => setNewItemForm({ ...newItemForm, distributor_id: e.target.value })}
-                        style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box', color: '#000' }}
-                      >
-                        <option value="">Unassigned</option>
-                        {vendors.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: '16px' }}>
-                    <label style={{ fontSize: '12px', color: '#999', textTransform: 'uppercase', fontWeight: '600', display: 'block', marginBottom: '6px' }}>Notes</label>
-                    <input
-                      type="text"
-                      placeholder="Optional notes..."
-                      value={newItemForm.notes}
-                      onChange={e => setNewItemForm({ ...newItemForm, notes: e.target.value })}
-                      style={{ width: '100%', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '10px 12px', fontSize: '14px', boxSizing: 'border-box' }}
-                    />
-                  </div>
-
-                  <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                    <input
-                      type="checkbox"
-                      id="onMenu"
-                      checked={newItemForm.on_menu}
-                      onChange={e => setNewItemForm({ ...newItemForm, on_menu: e.target.checked })}
-                      style={{ cursor: 'pointer' }}
-                    />
-                    <label htmlFor="onMenu" style={{ fontSize: '14px', color: '#555', cursor: 'pointer', margin: 0 }}>Add to menu for future orders</label>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                    <button
-                      onClick={() => setAddItemStep('search')}
-                      style={{ padding: '12px', border: '1px solid #e8e8e8', borderRadius: '8px', background: '#fff', fontSize: '14px', fontWeight: '600', color: '#555', cursor: 'pointer' }}
-                    >
-                      ← Back
-                    </button>
-                    <button
-                      onClick={createNewItem}
-                      style={{ padding: '12px', border: 'none', borderRadius: '8px', background: '#3B6D11', color: '#fff', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}
-                    >
-                      Create & Add
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
         )}
       </div>
     </div>
