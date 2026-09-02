@@ -26,18 +26,6 @@ export default function BOHReceiveOrder() {
     return () => window.removeEventListener('resize', check)
   }, [])
 
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) { router.push('/auth/login'); return }
-      const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
-      await loadOrder(session.user.id)
-      setLoading(false)
-    }
-    init()
-  }, [params.orderId])
-
   const loadOrder = async (userId) => {
     const [{ data: orderData }, { data: lineData }, { data: receivingData }] = await Promise.all([
       supabase.from('orders').select('*').eq('id', params.orderId).eq('user_id', userId).single(),
@@ -47,7 +35,7 @@ export default function BOHReceiveOrder() {
     if (!orderData) { router.push('/boh/ordering'); return }
     setOrder(orderData)
     setLines((lineData || []).map(l => {
-      const resolved = !!l.receiving_status
+      const resolved = ['received', 'short', 'missing'].includes(l.receiving_status)
       return {
         ...l,
         resolved,
@@ -71,6 +59,18 @@ export default function BOHReceiveOrder() {
 
     setReceiving(recMap)
   }
+
+  useEffect(() => {
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) { router.push('/auth/login'); return }
+      const { data: prof } = await supabase.from('profiles').select('*').eq('id', session.user.id).single()
+      if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }
+      await loadOrder(session.user.id)
+      setLoading(false)
+    }
+    init()
+  }, [params.orderId])
 
   const toggleLine = (id) => {
     setLines(prev => prev.map(l => (l.id === id && !l.resolved) ? { ...l, received: !l.received, received_qty: !l.received ? l.final_qty : 0 } : l))
