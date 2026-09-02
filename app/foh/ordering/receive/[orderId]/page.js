@@ -35,7 +35,7 @@ export default function ReceiveOrder() {
     if (!orderData) { router.push('/foh/ordering'); return }
     setOrder(orderData)
     setLines((lineData || []).map(l => {
-      const resolved = !!l.receiving_status
+      const resolved = ['received', 'short', 'missing'].includes(l.receiving_status)
       return {
         ...l,
         resolved,
@@ -74,6 +74,7 @@ export default function ReceiveOrder() {
 
   useEffect(() => {
     const init = async () => {
+      console.log('[InventorySux] FOH receive page build 0823c loaded')
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/auth/login'); return }
       await loadOrder(session.user.id)
@@ -287,7 +288,7 @@ export default function ReceiveOrder() {
       <div style={{ padding: isMobile ? '16px' : '28px 24px', maxWidth: '900px', margin: '0 auto' }}>
 
         <div style={{ marginBottom: '16px' }}>
-          <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Confirm Delivery</h1>
+          <h1 style={{ fontSize: isMobile ? '17px' : '20px', fontWeight: '500', color: '#000' }}>Confirm Delivery <span style={{ fontSize: '10px', color: '#ccc', fontWeight: '400' }}>build 0823c</span></h1>
           <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>
             {order?.submitted_at ? new Date(order.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '--'}
             {' · '}{lines.length} items · {confirmedDistributors}/{totalDistributors} distributors confirmed
