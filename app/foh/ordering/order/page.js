@@ -258,32 +258,31 @@ function Order() {
   }
 
   const updateRow = (distName, idx, field, val) => {
+    let currentRow = null
     setOrderRows(prev => {
       const next = { ...prev }
       const rows = [...next[distName]]
       rows[idx] = { ...rows[idx], [field]: val }
       const row = rows[idx]
+      currentRow = row
       const par = field === 'par' ? val : (row.par || 0)
       const onHand = field === 'on_hand_count' ? val : (row.on_hand_count || 0)
       rows[idx].suggested = Math.max(0, Math.ceil(par - onHand))
       next[distName] = rows
       return next
     })
-    // Fire DB saves non-blocking so they don't delay state updates
+    // Fire DB saves non-blocking using currentRow captured inside setState
+    // (avoids stale closure reading the pre-update orderRows)
     if (field === 'par') {
       supabase.auth.getSession().then(({ data: { session } }) => {
-        const row = orderRows[distName][idx]
-        if (row?.id) supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', row.id).eq('user_id', session.user.id)
+        if (currentRow?.id) supabase.from('inventory_items').update({ par: parseFloat(val) || 0 }).eq('id', currentRow.id).eq('user_id', session.user.id)
       })
     }
-    if (draftOrder) {
-      const row = orderRows[distName][idx]
-      if (row?.line_id) {
-        const updateData = {}
-        if (field === 'on_hand_count') updateData.shelf_count = parseFloat(val) || 0
-        if (field === 'par') updateData.par = parseFloat(val) || 0
-        if (Object.keys(updateData).length) supabase.from('order_lines').update(updateData).eq('id', row.line_id)
-      }
+    if (draftOrder && currentRow?.line_id) {
+      const updateData = {}
+      if (field === 'on_hand_count') updateData.shelf_count = parseFloat(val) || 0
+      if (field === 'par') updateData.par = parseFloat(val) || 0
+      if (Object.keys(updateData).length) supabase.from('order_lines').update(updateData).eq('id', currentRow.line_id)
     }
   }
 
