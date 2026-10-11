@@ -1,212 +1,372 @@
-# Inventory Sux — Dev Notes
+# DEVNOTES — Inventory Sux
 
-Living reference for patterns, conventions, and gotchas established during development. Paste this at the start of a new chat session along with whatever file(s) you're working on — it gives Claude the "why" behind the code so we stop re-litigating settled decisions and reintroducing fixed bugs.
-
-**Update this file** whenever a new pattern, gotcha, or schema change gets established. Treat it as part of the deliverable for any session that introduces something future sessions need to know.
+> **Repo:** NoStrangersHospitality/inventory-sux  
+> **Prod:** app.inventorysux.com  
+> **Stack:** Next.js (App Router) · Supabase (Postgres + Auth + Storage) · Vercel · Stripe · SendGrid · Twilio
 
 ---
 
 ## Core Architecture
 
-- **Stack**: Next.js (App Router) + Supabase (Postgres + Auth + Storage) + Vercel + Stripe + SendGrid + Twilio
-- **Repo**: `NoStrangersHospitality/inventory-sux`
-- **Production URL**: `app.inventorysux.com`
-- **Areas**: The app is split into **FOH** (front of house — bar/spirits/wine) and **BOH** (back of house — kitchen). Most tables have an `area` column (`'foh'` | `'boh'`) and pages live under `app/foh/...` and `app/boh/...` with largely parallel structure.
-
-### ⚠️ File delivery — download filenames are NOT repo paths
-When Claude hands over finished files as downloads, the download filename is just a flat label (the download tool can't create nested folders like `app/foh/ordering/receive/[orderId]/`). It is **never** an instruction to rename, move, or restructure anything in the repo — in Next.js App Router, a file's path *is* its route, so renaming one breaks the page it serves.
-
-**Instructions must always separate the two clearly**: "open `foh-ordering-receive-page.js`, paste its content into `app/foh/ordering/receive/[orderId]/page.js` — the path doesn't change, only the content." If a delivery message reads like "replace X with Y" without saying the real repo path stays the same, that's a bug in the instructions, not a real rename — stop and clarify before running anything.
-
-### ⚠️ FOH/BOH pages drift — check both before assuming consistency
-FOH and BOH ordering pages (`app/foh/ordering/order/page.js` and `app/boh/ordering/order/page.js`) are structurally parallel but maintained as separate files, not shared components. They have already drifted at least once: BOH's `markAsReady`/`submitOrder` correctly wrote `unit: row.orderUnit || row.unit || null` to `order_lines`, while FOH's equivalent functions never wrote a `unit` field at all — silently breaking the PDF/email order summary's UNIT column for FOH orders for an unknown period before being caught (see Outstanding Items below for the fix). **Any bug fix or feature added to one of these pages should be checked against its sibling before assuming the other one already has it** — don't assume parity just because they look structurally identical.
-
----
-
-## Data Ownership Model — `ownerId` pattern
-
-**This is the single most important pattern in the app and the most common source of regressions.**
-
-- Auth session = the logged-in user (could be an owner OR a staff member).
-- All data queries must use the **owner's** user ID, not the session user's ID directly.
-- `useRole()` hook (`hooks/useRole.js`) returns `ownerId = profile.owner_user_id || session.user.id`.
-  - For an **owner**, `owner_user_id` is null, so `ownerId` falls back to their own session ID.
-  - For **staff**, `owner_user_id` points to the owner's ID, so `ownerId` resolves to the owner.
-
-### ✅ Correct pattern (use this everywhere):
-```js
-const { ownerId } = useRole()
-const { data: { session } } = await supabase.auth.getSession()
-const ownerIdToUse = ownerId || session.user.id
-```
-
-### ❌ Anti-pattern — DO NOT introduce `ownerIdResolved` state
-We've repeatedly added a `useState` called `ownerIdResolved` that gets set once during `init()` and then referenced in other functions (`saveInvoice`, `approveInvoice`, `handleFileUpload`, etc.). **This breaks** because:
-- State can be stale/null if the function fires before `init()` completes, or after a refresh.
-- `ownerId` from `useRole()` is always live — there's no reason to cache it in local state.
-
-**If you see `ownerIdResolved` anywhere, replace it with `ownerId || session.user.id` inline and remove the state.**
-
-### `initRan` ref pattern
-Every page using `useRole()` should guard its init `useEffect` with a ref to prevent double-init when `ownerId` changes from `null` → resolved value:
-
-```js
-const initRan = useRef(false)
-
-useEffect(() => {
-  if (!ownerId) return
-  if (initRan.current) return
-  initRan.current = true
-
-  const init = async () => { /* ... */ }
-  init()
-}, [ownerId])
-```
+- **Auth:** Supabase Auth. Users have a `role` column (`owner`, `admin`, `staff`).
+- **ownerId pattern:** Throughout the app, always resolve as `ownerId || session.user.id` — never rely on a `ownerIdResolved` state variable. This prevents staff/admin accounts from losing their owner association.
+- **initRan ref guard:** Use a `const initRan = useRef(false)` guard inside useEffect to prevent double-initialization (React StrictMode fires effects twice in dev).
+  ```js
+  const initRan = useRef(false)
+  useEffect(() => {
+    if (initRan.current) return
+    initRan.current = true
+    // ... init logic
+  }, [])
+  ```
+- **FOH/BOH parallel structure:** `app/foh/` and `app/boh/` mirror each other. Pages can silently drift. Any fix to one side must be audited and applied to the other. See "FOH/BOH Drift" section below.
 
 ---
 
 ## Auth & Admin
 
-- `profiles.is_admin` (boolean) gates access to `/admin`.
-- **Login redirect**: `app/auth/login/page.js` checks `is_admin` after `signInWithPassword` and routes to `/admin` vs `/dashboard`. The OAuth callback (`app/auth/callback/route.js`) does the same check for magic-link/OAuth flows.
-- **Pure admin accounts** (e.g. `billy@inventorysux.com`) have no `bar_name`, no subscription — `subscription_status` can be null. They always land on `/admin`.
-- **Real subscriber accounts** that also happen to have `is_admin = true` (e.g. Billy's main Blacksheep account) will ALSO redirect to `/admin` on login — there's a "← App" button in the admin topbar to get back to `/dashboard`. This is a known minor friction point, not yet fixed for dual-purpose accounts.
-- **Add Admin** button on `/admin` → `app/api/admin/create-admin/route.js` creates a new auth user + profile with `is_admin: true`, `subscription_status: 'comp'`, and sends a password-setup email via `resetPasswordForEmail`.
-- **Supabase Auth → URL Configuration → Site URL** must be `https://app.inventorysux.com` (not localhost) or password reset / confirmation links break. This was a real incident — Site URL had reverted to localhost and broke reset emails until fixed.
-- Creating auth users directly via SQL (`insert into auth.users ...`) is fragile — login can fail with "Database error querying schema" even when the row looks correct. **Prefer Supabase Dashboard → Authentication → Add User** (with Auto Confirm) over raw SQL inserts. If you must fix a password via SQL, use:
-  ```sql
-  update auth.users set encrypted_password = crypt('NewPass123!', gen_salt('bf')) where email = '...';
-  ```
-- Supabase sometimes caches deleted user emails for a few minutes ("already registered" error after delete) — wait or use a temp email and rename via SQL after.
+- Admins can manage staff but **cannot deactivate each other** — guard needed (not yet built).
+- `role` column on `profiles` table: `owner | admin | staff`.
+- RLS policies: staff/admin operate under the owner's `user_id`. ownerId is passed explicitly through most queries.
 
 ---
 
-## Staff / Team Roles
+## Order Pages (FOH + BOH)
 
-- `profiles.team_role` and `profiles.owner_user_id` identify staff accounts.
-- `profiles.boh_access` gates BOH visibility for staff.
-- BOH page guards: `if (!prof?.boh_access && !prof?.owner_user_id) { router.push('/dashboard'); return }` — owners always pass (no `owner_user_id`), staff need `boh_access`.
-- Dashboard BOH tile: `canBOH = can('view_boh') && (isOwner ? profile?.boh_access : true)` — staff with `boh_staff` role see the tile regardless of the owner's own `boh_access` flag.
-
----
-
-## Receiving Confirmation Flow — source of truth for `on_hand`
-
-**As of August 23, 2026: receiving confirmation is what writes `on_hand`.** Invoice scanning is a record-keeping/audit layer only (see next section) — this was a deliberate architecture flip from an earlier "invoice writes on_hand" design, made because distributors substitute SKUs/vintages/sizes and receiving alone can't catch that (a future phase will have invoice scanning flag those discrepancies against the matched order — not built yet).
-
-- **Per-line, not per-distributor**: each `order_lines` row resolves independently (`receiving_status`: `received` / `short` / `missing`, or `null` = still open). A distributor's section only locks once every one of its lines is resolved — a backordered item can stay open indefinitely and get checked in days later without re-touching the rest.
-- **Confirm buttons**: 🟢 *All Received* (every open line, full ordered qty) · 🟡 *Confirm As Shown* (only currently-checked open lines; unchecked lines stay open, untouched) · 🔴 *Reject Remaining* (marks all still-open lines missing, no inventory write).
-- **On confirm**: for each line being resolved as received, `inventory_items.on_hand` increments by `received_qty`, logged to `inventory_history` as `event_type: 'receiving'`.
-- **Reopen** on an already-closed distributor reverses exactly what was written (logged as `event_type: 'receiving_reversal'`) before handing the lines back as open. This is load-bearing — reopening without reversal would double-count `on_hand` on re-confirm.
-- **Cost (`unit_cost`) is set once**, when an item is created (inventory database page) — never touched by receiving or invoice approval.
-
-### Pinned / not yet built
-Per-distributor order identifiers (format `MMDD-DIST-##`, e.g. `0823-SOU-01`) so invoice scanning can associate to a specific distributor-order and flag SKU/vintage/size discrepancies against it. An order can have multiple invoices over time (no lock-out). Walk-in/no-order deliveries route through manual inventory adjustment, not invoice scanning.
-
----
-
-## Invoice Scanning & Approval — record-keeping only
-
-**Not a source of truth for `on_hand`** (see Receiving Confirmation above). Flow: Scan → Review/Match → **Save for Approval** (writes `invoice_lines`, status → `processed`) → Hub shows **Approve** on `processed` invoices → **Approve** marks the invoice `confirmed` and refreshes `item_aliases` for future OCR matching. **It does not write `inventory_items.on_hand`/`unit_cost` and does not create new inventory items** — matching only goes to existing items; unmatched lines stay unmatched for the record. New items are created via the inventory database page, not from an invoice.
-
-### `invoices.status` — CHECK CONSTRAINT
-Only allows: `'pending'`, `'processing'`, `'processed'`, `'confirmed'`. **`'scanned'` is NOT allowed** — use `'processed'` for the initial upload status (we use `processed` for both "just scanned" and "saved, awaiting approval" — there's no separate scanned state).
-
-### `invoice_lines.match_status` — CHECK CONSTRAINT
-Allows: `'matched'`, `'unmatched'`, `'manual'`, `'create_new'`, `'low_confidence'`. (`create_new` is a legacy value from before the invoice-approve rework above — no longer produced by the UI, but existing rows may still have it.)
-
-### `invoice_lines` schema (additions beyond original)
-```sql
-alter table invoice_lines add column if not exists is_create_new boolean default false;
-alter table invoice_lines add column if not exists new_category text;
-alter table invoice_lines add column if not exists case_size integer default 1;
-alter table invoice_lines add column if not exists item_number text;
+### ownerId pattern
+```js
+const ownerIdToUse = ownerId || session.user.id
 ```
-- `item_number` carries the distributor SKU from the scan through for matching.
-- `is_create_new`/`new_category` are legacy columns from the old create-new-item-on-approve flow — no longer written by the UI, left in place for historical rows.
-- `case_size` is still captured on scan for future use but no longer drives an `on_hand` write from this flow.
+Never read from a `ownerIdResolved` state — use the above inline.
 
-### `/api/scan-invoice` (Claude Haiku OCR)
-- Extracts `vendor`, `invoice_number`, `invoice_date`, `total_amount`, and `line_items[]` with `raw_name`, `item_number`, `qty`, `unit`, `unit_cost`, `total_cost`.
-- Does SKU-first matching against `inventory_items.item_number`, falls back to fuzzy name matching (`similarityScore`).
-- Match statuses returned by the API: `matched` (SKU or high name-similarity), `low_confidence` (weak name match), `unmatched`. (`create_new` was only ever client-side UI, never server-set.)
+### Par input (Mac Chrome controlled-input fix)
+Supabase returns numeric columns as **strings**. Using `defaultValue` causes a blank display on Mac Chrome when the string `"0"` doesn't match number `0` on re-render. Always use a **controlled** input:
+```js
+<input
+  type="number"
+  min="0"
+  value={parseFloat(row.par) || 0}
+  onChange={e => updateRow(dn, ri, 'par', parseFloat(e.target.value) || 0)}
+/>
+```
+This must be applied on ALL paths that build row state (initial load, resume, etc.).
 
----
+### order_lines unit field
+Both `markAsReady` and `submitOrder` must write the `unit` field on every order_lines insert/upsert:
+```js
+unit: row.orderUnit || row.unit || null
+```
+The email order route renders it as `${line.unit || '--'}` in the order table.
 
-## Email Reply Parsing (`app/api/email/reply/route.js`)
+### Empty-recap guard
+Both `markAsReady` and `submitOrder` must check for an empty order before proceeding:
+```js
+const lines = []
+// ... build lines ...
+if (lines.length === 0) {
+  alert('No items to order.')
+  return
+}
+```
+Also applies to the "resume as ready" path.
 
-`extractReply()` strips the quoted thread/signature/security-banner noise from inbound SendGrid emails. Cuts at the first line matching: `From:`, `-----Original Message-----`, `-----Forwarded Message-----`, `On ... wrote:`, `Sent:`, `Inventory Sux New Order`, `Submitted by`, `Order #...`, `[EXTERNAL]`, `CAUTION:`, `WARNING:`, or any `>` quoted line. Everything above the cut is the real reply.
+### 4-week order history
+`orderHistory` state holds last 4 orders per item. Displayed as "Last 4" and "Avg" columns in the order table. Uses a fixed reference frame — items not ordered in a given week show explicit `0` rather than being omitted.
 
-If you see raw email headers/CAUTION banners/quoted order text showing up in `order_replies.message`, this function needs another pattern added to `cutPatterns`.
+Helper functions: `getItemHistory(itemId)` → array of last 4 qtys, `getItemHistoryAvg(itemId)` → average.
 
----
+### Stale closure in updateRow
+When `updateRow` became non-async, reading `orderRows[distName][idx]` after `setOrderRows` returned stale pre-update state, causing `line_id` to be undefined and silent failures on per-keystroke draft saves.
 
-## COGS / Spirits Database
+**Fix:** Capture the updated row inside the setState callback:
+```js
+let currentRow = null
+setOrderRows(prev => {
+  const updated = { ...row, [field]: val }
+  currentRow = updated
+  // ... return new state
+})
+// use currentRow for DB saves, not orderRows[distName][idx]
+```
 
-- **Currently a SEPARATE system** from FOH inventory — `spirits` table (with `bottle_size_oz`, `bottle_cost`, `category` like "Bourbon"/"Liqueur"/etc., `distributor` as free text) vs `inventory_items` (with `unit_cost`, `on_hand`, `area`, `distributor_id` FK, category like "liquor"/"wine"/"beer"/"misc").
-- **Long-term plan (not yet started)**: merge `spirits` into `inventory_items`. This requires:
-  - Adding `bottle_size_oz` and a spirit-specific category field to `inventory_items`
-  - Migrating `recipe_ingredients.spirit_id` FKs to point at `inventory_items.id`
-  - Reconciling category vocabularies (spirit categories are granular: Bourbon/Rye/Scotch/etc.; inventory categories are broad: liquor/wine/beer/misc)
-- **Short-term bridge**: CSV export/import between the two systems. The Google Sheets COGS workbook (`COGS_WorkBook.xlsx`, sheet "🍾 Spirits Database") is the source of truth for current accurate bottle sizes/costs — more accurate than `inventory_items.unit_cost` which is mostly `0.0000` (never populated via invoices yet).
-- COGS spirits CSV import format: `Name, Category, Bottle Size (oz), Bottle Cost ($), Distributor, Notes`. Category is free text matching the `CATEGORIES` array in `app/foh/cogs/page.js` (Bourbon, Rye, Scotch, Irish, Japanese, Whiskey, Tequila, Mezcal, Vodka, Gin, Rum, Brandy, Liqueur, Aperitif, Bitters, Other).
-
----
-
-## Key Environment Variables / IDs
-
-- `ANTHROPIC_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `NEXT_PUBLIC_APP_URL` — should be `https://app.inventorysux.com` (watch for localhost regressions)
-- Stripe live price IDs: FOH `price_1TbRALLCkHYfmSfEspfqqokK`, BOH `price_1TbRBVLCkHYfmSfEtxICvRMN`, Bundle `price_1TbRCJLCkHYfmSfE0sXdf9xS`
-- Twilio number `+14632232985`, current Messaging Service SID `MG7698c334fd5f54419510972470f976d1` (A2P 10DLC campaign approved/active as of this session)
-- Old Twilio Messaging Service `MG149ae6124d1a5a2921ff566c7912867c` — has a warning, check references before deleting
-
----
-
-## Production Auth Users (reference)
-
-| Email | UID | Role |
+### FOH/BOH Drift — known differences
+| | FOH | BOH |
 |---|---|---|
-| `billy.fredlund@uplandbrewing.com` | `e98897c2-...0343732` | Main Blacksheep owner account (comp, boh_access) |
-| `billy@inventorysux.com` | `9add3022-...193f09` | Pure admin account → `/admin` |
-| `test@inventorysux.com` | `8f21fbd8-...d9106f7` | Test bar account |
-| `bfredlund@geoacademies.org` | `e6f06797-...000dcda` | BOH staff test account |
-| `thefredlund5@gmail.com` | `42f9fc54-...e1b6b1` | Misc test account |
+| SMS order_method check | `contact.order_method?.toLowerCase() === 'sms'` | `contact.order_method === 'Text' \|\| contact.order_method?.toLowerCase() === 'sms'` |
+| Vendor table | `distributors` | `vendors` |
+
+**BOH 'Text' gotcha:** BOH vendor records store `order_method = 'Text'` (capital T), not `'sms'`. The BOH SMS send check must include `contact.order_method === 'Text'` explicitly, in addition to the lowercase fallback. Forgetting this causes BOH SMS orders to silently not send.
 
 ---
 
-## `order_lines` columns (reference — do not add `category`, it doesn't exist)
-`id, order_id, user_id, item_id, item_name, unit, distributor_id, distributor_name, par, shelf_count, well_count, suggested_qty, final_qty, created_at, org_id, location_id, received_qty, receiving_status`
+## Email Ordering
 
-`unit` stores the order unit (bottle/case/keg/etc, from `row.orderUnit`) and feeds the UNIT column on the PDF/email order confirmation. Both FOH and BOH now write `unit: row.orderUnit || row.unit || null` in `markAsReady`/`submitOrder` — confirm both stay in sync if this is touched again (see FOH/BOH drift warning above).
+- **Route:** `app/api/email/order/route.js`
+- **Reply-to:** `orders@parse.inventorysux.com` (SendGrid Inbound Parse)
+- **Subject format:** `[#${orderId?.slice(0, 8).toUpperCase()}]` — included in subject for reply thread matching
+- **Unit column:** `${line.unit || '--'}` rendered in the order email table
+
+### SendGrid Inbound Parse → order_replies
+- **Route:** `app/api/email/reply/route.js`
+- Parse webhook hits this route on inbound reply emails
+- **Distributor matching:** exact email match first (`.ilike()`), then domain fallback
+- Always uses the matched distributor's **stored name** (`dist.name`), never a name derived from order data
+- `extractReply()` strips quoted thread/signatures with `cutPatterns`:
+  - `From:`, `Original Message`, `Forwarded Message`, `On...wrote:`, `Sent:`, `Inventory Sux New Order`, `Submitted by`, `Order #`, `[EXTERNAL]`, `CAUTION:`, `WARNING:`, `> ` (quoted lines)
+- Inserts into `order_replies` with `archived: false`
+
+### DMARC config
+DNS `_dmarc` record was originally `p=reject; adkim=s; aspf=s` — too strict, causing deliverability failures.
+
+**Current (relaxed):**
+```
+p=none; adkim=r; aspf=r
+```
+Change from `p=reject` → `p=none` and strict alignment → relaxed allows legitimate mail through while monitoring.
+
+> **SendGrid account verification:** Response submitted, awaiting resolution as of this writing.
 
 ---
 
-## Silent insert failures hide as $0.00 / 0% costs or blank fields
-If a `.insert()` call into a table feeds a cost calculation or a downstream display (recipe_ingredients, prep_item_ingredients, order_lines), always check the returned `error` and surface it (console.error + alert), don't just await and move on. A missing column — e.g. a migration that wasn't run yet — makes PostgREST reject the whole insert. The parent record still saves fine, but the line items silently never get created, and the UI just shows $0.00 or `--` with no indication why. This has bitten us on `recipe_ingredients` (missing `source_type`/`source_id` columns) and is the same shape of bug as the FOH `order_lines.unit` gap — always confirm a written field is being read by every consumer (PDF generator, receive page, recap screen, etc.), not just the page that wrote it.
+## SMS Ordering
+
+- **Route:** `app/api/sms/order/route.js`
+- **Provider:** Twilio
+- **Inbound webhook:** `app/api/sms/reply/route.js` — receives replies, inserts into `order_replies`
+
+### Phone number normalization
+Raw string compare fails for formatted numbers. Always normalize before matching:
+```js
+const normalize = (p) => p?.replace(/\D/g, '').slice(-10)
+const match = vendors.find(v => normalize(v.phone) === normalize(fromNumber))
+```
+Apply this in the SMS webhook reply route when matching incoming numbers to stored vendor phone numbers.
+
+### Twilio A2P 10DLC Compliance
+**Campaign approved:** `CM557c73f4c26a3f6c08`  
+**Messaging Service SID:** set in Vercel env (`TWILIO_MESSAGING_SERVICE_SID`)
+
+Infrastructure built:
+- SMS consent checkbox on distributors and vendors edit pages
+- Consent confirmation page at `/distributor-sms-consent`
+- ToS Section 8 added (SMS consent language)
+- `sms_consent_confirmed`, `sms_consent_confirmed_at`, `sms_consent_confirmed_by` columns on both `distributors` and `vendors` tables
+
+**SQL migrations run:**
+```sql
+alter table distributors
+  add column if not exists sms_consent_confirmed boolean default false,
+  add column if not exists sms_consent_confirmed_at timestamptz,
+  add column if not exists sms_consent_confirmed_by uuid;
+
+alter table vendors
+  add column if not exists sms_consent_confirmed boolean default false,
+  add column if not exists sms_consent_confirmed_at timestamptz,
+  add column if not exists sms_consent_confirmed_by uuid;
+```
 
 ---
 
-## Order Sheet Item Management
+## Notifications / order_replies
 
-**Added July 5, 2026**: FOH and BOH ordering pages now support ad hoc item addition and removal during order creation.
-
-- **Add Item button** (green, on sheet view): Opens modal with two options:
-  - **Search existing items**: Searches all FOH/BOH inventory items (regardless of `on_menu` status), excludes items already in current order
-  - **Create new item**: Prompts for name, category, unit, and `on_menu` flag; creates new row in `inventory_items` immediately
-- **Remove button** (red X, right column of each item): 
-  - Removes item from current order (both `orderRows` and `recapRows`)
-  - Sets `on_menu = false` in `inventory_items` (prevents item from auto-appearing in future orders)
-- **Implementation**: Both FOH (`app/foh/ordering/order/page.js`) and BOH (`app/boh/ordering/order/page.js`) have identical add/remove functions — **keep in sync** if modifying.
+- **Dashboard bell:** Shows unread reply count. Tray opens on click. Does **NOT** auto-mark-all-read on open (this behavior was intentionally removed). Explicit "Mark all read" button in tray.
+- **"View all notifications →"** link in tray points to `/notifications`.
+- **Notifications page:** `app/notifications/page.js` — full reply history with archive support.
+- **`archived` column on `order_replies`:** Added migration:
+  ```sql
+  alter table order_replies add column if not exists archived boolean default false;
+  ```
+- **Realtime:** Dashboard subscribes to new `order_replies` inserts for live bell updates.
+- **`loadReplies` must be defined before the useEffect that calls it** (ESLint `react-hooks/immutability` rule). Move the function definition above the useEffect.
 
 ---
 
-## Outstanding / Pinned Items
+## COGS
 
-- [ ] Per-distributor order IDs (`MMDD-DIST-##`) + invoice-to-order association UI (OCR reads distributor → surfaces recent matching distributor-orders → "Add Order" manual fallback) — needed to make invoice scanning catch SKU/vintage/size discrepancies against the matched order
-- [ ] COGS ↔ Inventory full DB unification (see above) — dedicated session needed
-- [ ] Admin permission guards — prevent admins from deactivating each other or the owner account
-- [ ] Dual-purpose accounts (real subscriber + is_admin) always redirect to `/admin` on login — minor friction, not fixed
-- [ ] Rep reply notification UI polish — re-test once a real distributor reply comes through post email-parsing-fix
-- [ ] Audit other FOH/BOH page pairs for similar drift (only `order_lines.unit` has been checked/fixed so far; receive pages just reworked Aug 23, 2026)
-- [ ] Export count functionality for R365/MarketMan/MarginEdge (pinned for next session, features built: `lib/exportFormats.js` planned, modal component needs wiring)
+### recipe_ingredients source pattern
+Ingredients can come from spirits, prep items, or purchased inventory items. Schema uses `source_type` + `source_id` to handle all cases:
+
+```sql
+alter table recipe_ingredients add column if not exists source_type text default 'spirit';
+alter table recipe_ingredients add column if not exists source_id uuid;
+update recipe_ingredients
+  set source_type = 'spirit', source_id = spirit_id
+  where source_id is null and spirit_id is not null;
+```
+
+`source_type` values: `'spirit'` | `'prep_item'` | `'inventory_item'`
+
+### Prep items — purchased type
+Prep items can be either made in-house or purchased:
+```sql
+alter table prep_items add column if not exists source_type text default 'made';
+alter table prep_items add column if not exists purchase_cost numeric;
+```
+`source_type`: `'made'` | `'purchased'`
+
+### Unit conversion oz split-table fix
+`oz` appears in **both** `WEIGHT_TO_G` (28.3495 g) and `VOLUME_TO_ML` (29.5735 ml). The conversion function must check whether both units are weight units before selecting the lookup table — otherwise g↔oz picks the wrong table and causes ~28x overcost.
+
+```js
+const weightUnits = new Set(['g', 'kg', 'oz', 'lb'])
+const useWeight = weightUnits.has(fromUnit) && weightUnits.has(toUnit)
+const table = useWeight ? WEIGHT_TO_G : VOLUME_TO_ML
+```
+
+> **Long-term:** Full DB unification of COGS ↔ Inventory items is a dedicated session. Currently two separate data stores.
+
+---
+
+## ESLint Patterns
+
+Four rules that come up repeatedly:
+
+### 1. Declaration order (`react-hooks/immutability`)
+Functions called inside a `useEffect` must be defined **before** the effect:
+```js
+// ✅ correct
+function loadReplies() { ... }
+useEffect(() => { loadReplies() }, [])
+
+// ❌ wrong — ESLint error
+useEffect(() => { loadReplies() }, [])
+function loadReplies() { ... }
+```
+
+### 2. exhaustive-deps
+When a useEffect intentionally omits a dependency (e.g., a function that would cause infinite loops if added), suppress with:
+```js
+// eslint-disable-next-line react-hooks/exhaustive-deps
+```
+Do not add the dependency if it would cause an infinite loop — suppress instead.
+
+### 3. Ternary-as-statement
+ESLint forbids ternaries used as statements (for side effects). Replace with `if/else`:
+```js
+// ❌ wrong
+next.has(cat) ? next.delete(cat) : next.add(cat)
+
+// ✅ correct
+if (next.has(cat)) { next.delete(cat) } else { next.add(cat) }
+```
+
+### 4. Unused variables
+- Remove destructured vars that aren't used: `const [, group] = something` instead of `const [vendorName, group] = something`
+- Common culprits: `distributorName` in SMS order route, `vendorName`/`distName` in order pages
+
+---
+
+## RLS Policies
+
+**Known conflict (resolved 6/23/2026):** "Users can manage own order lines" policy conflicted with "order_lines_insert" policy. Both had to be satisfied simultaneously, causing silent insert failures for staff/admin accounts.
+
+**Fix:** Drop the old policy, keep only the one that works for all roles:
+```sql
+drop policy if exists "Users can manage own order lines" on order_lines;
+```
+
+When RLS insert failures happen: check `supabase.from(...).insert(...).select()` — if `data` is empty with no error, it's usually an RLS conflict.
+
+---
+
+## Database Schema Notes
+
+### order_lines
+```
+id, order_id, user_id, item_id, item_name,
+distributor_id, distributor_name,
+par, shelf_count, well_count,
+suggested_qty, final_qty,
+unit  ← written by both FOH and BOH markAsReady/submitOrder
+```
+
+### order_replies
+```
+id, order_id, distributor_id, distributor_name,
+reply_text, received_at,
+read (boolean),
+archived (boolean, default false)  ← added this session
+```
+
+### distributors / vendors (SMS consent columns added)
+```
+sms_consent_confirmed (boolean, default false)
+sms_consent_confirmed_at (timestamptz)
+sms_consent_confirmed_by (uuid → profiles.id)
+```
+
+### recipe_ingredients (COGS source pattern)
+```
+source_type (text, default 'spirit')  ← 'spirit' | 'prep_item' | 'inventory_item'
+source_id (uuid)                       ← replaces hard-coded spirit_id for non-spirit ingredients
+spirit_id (uuid)                       ← still present for legacy rows
+```
+
+### prep_items (purchased type)
+```
+source_type (text, default 'made')  ← 'made' | 'purchased'
+purchase_cost (numeric)
+```
+
+---
+
+## Invoice Scanning
+
+- Uploads invoice image → OpenAI Vision extracts line items
+- Matched against inventory items by name similarity
+- Creates `received_items` records
+- Route: `app/api/invoices/scan/route.js`
+
+---
+
+## Ghost Order Cleanup SQL
+
+A stuck order with `receiving_status='pending'` and `status='submitted'` can block the receiving flow. To clean up:
+
+```sql
+-- Find stuck orders for a user
+select id, submitted_at from orders
+where receiving_status = 'pending'
+  and status = 'submitted'
+  and user_id = '<owner_user_id>';
+
+-- Clean up (replace <order_id> with actual id)
+delete from order_receiving where order_id = '<order_id>';
+delete from orders where id = '<order_id>';
+```
+
+> **Note:** As of this writing, one stuck order exists for user `e98897c2-495c-4e15-91e0-ec3a10343732`. Run the select first to confirm the id, then delete.
+
+---
+
+## Vercel Environment Variables
+
+Key env vars (set in Vercel dashboard):
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `OPENAI_API_KEY`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_MESSAGING_SERVICE_SID` ← updated for A2P campaign
+- `SENDGRID_API_KEY`
+- `STRIPE_SECRET_KEY`
+- `STRIPE_WEBHOOK_SECRET`
+
+---
+
+## Outstanding / Next Sessions
+
+### Immediate
+- [ ] Run ghost order cleanup SQL (user `e98897c2...`)
+- [ ] Verify "View all notifications →" link is in live `app/dashboard/page.js`
+- [ ] Audit all other FOH/BOH page pairs for drift (beyond order pages)
+
+### Short-term
+- [ ] Admin permission guard — prevent admins from deactivating each other
+- [ ] SMS inline reply feature — reply to a distributor from the notification tray
+- [ ] SendGrid account verification — awaiting resolution
+
+### Dedicated sessions (scope too large for inline)
+- [ ] COGS ↔ Inventory full DB unification
+- [ ] Multi-location / parent account architecture
