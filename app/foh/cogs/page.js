@@ -1,10 +1,9 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
 
-const CATEGORIES = ['Bourbon', 'Rye', 'Scotch', 'Irish', 'Japanese', 'Whiskey', 'Tequila', 'Mezcal', 'Vodka', 'Gin', 'Rum', 'Brandy', 'Liqueur', 'Aperitif', 'Bitters', 'Other']
 const PREP_CATEGORIES = ['Syrup', 'Batch', 'Infusion', 'Tincture', 'Shrub', 'Juice', 'Puree', 'Other']
 const UNITS = ['oz', 'dash', 'tsp', 'tbsp']
 const PREP_UNITS = ['oz', 'ml', 'l', 'tsp', 'tbsp', 'cup', 'lb', 'g', 'each']
@@ -47,26 +46,6 @@ const costOz = (s) => s.bottle_size_oz > 0 ? s.bottle_cost / s.bottle_size_oz : 
 
 // --- Sub-components defined outside parent to prevent focus loss ---
 
-const SpiritForm = ({ form, setForm, saving, isMobile, editingId, onSave, onCancel }) => {
-  const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
-  return (
-    <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: isMobile ? '16px' : '24px', marginBottom: '16px' }}>
-      <h3 style={{ fontSize: '15px', fontWeight: '500', color: '#000', marginBottom: '14px' }}>{editingId ? 'Edit Spirit' : 'Add Spirit'}</h3>
-      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-        <div style={{ gridColumn: '1/-1' }}><label style={labelStyle}>Item / Spirit Name</label><input style={inputStyle} placeholder="Buffalo Trace Bourbon" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Category</label><select style={inputStyle} value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}><option value="">-- Select --</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
-        <div><label style={labelStyle}>Bottle Size (oz)</label><input style={inputStyle} type="number" step="0.01" placeholder="25.36" value={form.bottle_size_oz} onChange={e => setForm(f => ({ ...f, bottle_size_oz: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Bottle Cost ($)</label><input style={inputStyle} type="number" step="0.01" placeholder="35.10" value={form.bottle_cost} onChange={e => setForm(f => ({ ...f, bottle_cost: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Distributor</label><input style={inputStyle} placeholder="Republic National" value={form.distributor} onChange={e => setForm(f => ({ ...f, distributor: e.target.value }))} /></div>
-        <div><label style={labelStyle}>Notes</label><input style={inputStyle} placeholder="750ml, special order..." value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} /></div>
-      </div>
-      <div style={{ display: 'flex', gap: '10px' }}>
-        <button onClick={onCancel} style={{ flex: 1, background: '#444', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', cursor: 'pointer' }}>Cancel</button>
-        <button onClick={onSave} disabled={saving} style={{ flex: 2, background: saving ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '12px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: saving ? 'not-allowed' : 'pointer' }}>{saving ? 'Saving...' : 'Save Spirit'}</button>
-      </div>
-    </div>
-  )
-}
 
 const PrepIngForm = ({ form, setForm, saving, isMobile, editingId, onSave, onCancel }) => {
   const inputStyle = { width: '100%', background: '#fafafa', border: '1px solid #e8e8e8', borderRadius: '8px', padding: '9px 12px', fontSize: '16px', color: '#000', boxSizing: 'border-box' }
@@ -96,19 +75,14 @@ export default function COGS() {
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState('hub')
   const [prepView, setPrepView] = useState('items')
-  const [showSpiritForm, setShowSpiritForm] = useState(false)
   const [showRecipeForm, setShowRecipeForm] = useState(false)
   const [showPrepIngForm, setShowPrepIngForm] = useState(false)
   const [showPrepItemForm, setShowPrepItemForm] = useState(false)
-  const [editingSpiritId, setEditingSpiritId] = useState(null)
   const [editingRecipeId, setEditingRecipeId] = useState(null)
   const [editingPrepIngId, setEditingPrepIngId] = useState(null)
   const [editingPrepItemId, setEditingPrepItemId] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [importingSpirits, setImportingSpirits] = useState(false)
-  const [spiritImportPreview, setSpiritImportPreview] = useState(null)
   const [isMobile, setIsMobile] = useState(false)
-  const [spiritForm, setSpiritForm] = useState({ name: '', category: '', bottle_size_oz: '', bottle_cost: '', distributor: '', notes: '' })
   const [recipeForm, setRecipeForm] = useState({ name: '', menu_price: '', target_cost_pct: '0.20' })
   const [recipeIngs, setRecipeIngs] = useState([{ source_type: 'spirit', source_id: '', ingredient_name: '', quantity: '', unit: 'oz' }])
   const [prepIngForm, setPrepIngForm] = useState({ name: '', unit: '', cost_per_unit: '' })
@@ -131,15 +105,28 @@ export default function COGS() {
   }, [])
 
   const loadData = async (userId) => {
-    const [{ data: sp }, { data: rc }, { data: ri }, { data: pi }, { data: pit }, { data: pii }] = await Promise.all([
-      supabase.from('spirits').select('*').eq('user_id', userId).order('name'),
+    const [{ data: sp }, { data: rc }, { data: ri }, { data: pi }, { data: pit }, { data: pii }, { data: dists }] = await Promise.all([
+      // Spirit Database = the FOH Inventory (single source of truth for items, cost and bottle size).
+      supabase.from('inventory_items').select('id, name, category, subcategory, unit_cost, bottle_size_oz, distributor_id, notes').eq('user_id', userId).eq('area', 'foh').order('name'),
       supabase.from('recipes').select('*').eq('user_id', userId).order('name'),
       supabase.from('recipe_ingredients').select('*').eq('user_id', userId),
       supabase.from('prep_ingredients').select('*').eq('user_id', userId).order('name'),
       supabase.from('prep_items').select('*').eq('user_id', userId).order('name'),
       supabase.from('prep_item_ingredients').select('*').eq('user_id', userId),
+      supabase.from('distributors').select('id, name').eq('user_id', userId),
     ])
-    setSpirits(sp || [])
+    // Map Inventory rows to the shape this page already uses (bottle_cost / bottle_size_oz / distributor),
+    // so the recipe and cost math below is unchanged.
+    const distNames = Object.fromEntries((dists || []).map(d => [d.id, d.name]))
+    setSpirits((sp || []).map(i => ({
+      id: i.id,
+      name: i.name,
+      category: i.subcategory || i.category || '',
+      bottle_size_oz: parseFloat(i.bottle_size_oz) || 0,
+      bottle_cost: parseFloat(i.unit_cost) || 0,
+      distributor: distNames[i.distributor_id] || '',
+      notes: i.notes || '',
+    })))
     setRecipes(rc || [])
     setRecipeIngredients(ri || [])
     setPrepIngredients(pi || [])
@@ -266,63 +253,11 @@ export default function COGS() {
     ? (parseFloat(prepItemForm.purchase_cost) || 0)
     : livePrepCost()
 
-  const saveSpiritForm = async () => {
-    if (!spiritForm.name || !spiritForm.bottle_size_oz || !spiritForm.bottle_cost) return
-    setSaving(true)
-    const { data: { session } } = await supabase.auth.getSession()
-    const payload = { name: spiritForm.name, category: spiritForm.category, bottle_size_oz: parseFloat(spiritForm.bottle_size_oz), bottle_cost: parseFloat(spiritForm.bottle_cost), distributor: spiritForm.distributor, notes: spiritForm.notes, user_id: session.user.id }
-    if (editingSpiritId) { await supabase.from('spirits').update(payload).eq('id', editingSpiritId) }
-    else { await supabase.from('spirits').insert(payload) }
-    await loadData(session.user.id)
-    setShowSpiritForm(false)
-    setSaving(false)
-  }
-
   const exportSpirits = () => {
     const rows = [['Name', 'Category', 'Bottle Size (oz)', 'Bottle Cost ($)', 'Distributor', 'Notes']]
     spirits.forEach(s => rows.push([s.name, s.category || '', s.bottle_size_oz, s.bottle_cost, s.distributor || '', s.notes || '']))
     const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
     const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'spirits_database.csv'; a.click()
-  }
-
-  const downloadSpiritsTemplate = () => {
-    const rows = [['Name', 'Category', 'Bottle Size (oz)', 'Bottle Cost ($)', 'Distributor', 'Notes'], ['Buffalo Trace Bourbon', 'Bourbon', '25.36', '35.10', 'Republic National', ''], ['Hendricks Gin', 'Gin', '25.36', '38.00', 'Southern Glazers', ''], ["Tito's Vodka", 'Vodka', '33.81', '29.99', 'Southern Glazers', '']]
-    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'spirits_template.csv'; a.click()
-  }
-
-  const handleSpiritsImport = (e) => {
-    const file = e.target.files[0]; if (!file) return
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      const lines = ev.target.result.split(/\r?\n/).map(l => l.trim()).filter(l => l)
-      if (lines.length < 2) return
-      const hdr = lines[0].split(',').map(h => h.replace(/"/g, '').trim().toLowerCase())
-      const ni = hdr.findIndex(h => h.includes('name')), ci = hdr.findIndex(h => h.includes('cat')), si = hdr.findIndex(h => h.includes('size') && !h.includes('cost')), coi = hdr.findIndex(h => h.includes('cost')), di = hdr.findIndex(h => h.includes('dist')), noi = hdr.findIndex(h => h.includes('note'))
-      const parsed = []
-      for (let i = 1; i < lines.length; i++) {
-        const cols = lines[i].split(',').map(c => c.replace(/"/g, '').trim())
-        const name = cols[ni >= 0 ? ni : 0] || ''; if (!name) continue
-        const bottle_size_oz = parseFloat(cols[si >= 0 ? si : 2]) || 0
-        const bottle_cost = parseFloat(cols[coi >= 0 ? coi : 3]) || 0
-        parsed.push({ name, category: cols[ci >= 0 ? ci : 1] || '', bottle_size_oz, bottle_cost, distributor: cols[di >= 0 ? di : 4] || '', notes: cols[noi >= 0 ? noi : 5] || '', valid: bottle_size_oz > 0 && bottle_cost > 0 })
-      }
-      setSpiritImportPreview(parsed)
-    }
-    reader.readAsText(file); e.target.value = ''
-  }
-
-  const confirmSpiritsImport = async () => {
-    if (!spiritImportPreview) return
-    setImportingSpirits(true)
-    const { data: { session } } = await supabase.auth.getSession()
-    const existingNames = spirits.map(s => s.name.toLowerCase())
-    const toInsert = spiritImportPreview.filter(r => r.valid && !existingNames.includes(r.name.toLowerCase()))
-    if (toInsert.length > 0) {
-      await supabase.from('spirits').insert(toInsert.map(r => ({ name: r.name, category: r.category, bottle_size_oz: r.bottle_size_oz, bottle_cost: r.bottle_cost, distributor: r.distributor, notes: r.notes, user_id: session.user.id })))
-      await loadData(session.user.id)
-    }
-    setSpiritImportPreview(null); setImportingSpirits(false)
   }
 
   const saveRecipeForm = async () => {
@@ -342,7 +277,7 @@ export default function COGS() {
       const { error: ingError } = await supabase.from('recipe_ingredients').insert(validIngs.map(i => ({
         recipe_id: recipeId, user_id: session.user.id,
         source_type: i.source_type, source_id: i.source_id,
-        spirit_id: i.source_type === 'spirit' ? i.source_id : null,
+        spirit_id: null, // legacy column: FK to the old spirits table. source_id now holds the Inventory item id.
         ingredient_name: getSourceName(i.source_type, i.source_id),
         quantity: parseFloat(i.quantity), unit: i.unit
       })))
@@ -485,77 +420,19 @@ export default function COGS() {
                 {!isMobile && <p style={{ color: '#999', fontSize: '13px', marginTop: '4px' }}>Ingredients and cost per oz</p>}
               </div>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
-                {!isMobile && <>
-                  <button onClick={downloadSpiritsTemplate} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Template</button>
-                  {spirits.length > 0 && <button onClick={exportSpirits} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
-                  <label style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↑ Import<input type="file" accept=".csv" onChange={handleSpiritsImport} style={{ display: 'none' }} /></label>
-                </>}
-                <button onClick={() => { setSpiritForm({ name: '', category: '', bottle_size_oz: '', bottle_cost: '', distributor: '', notes: '' }); setEditingSpiritId(null); setShowSpiritForm(true) }} style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>+ Add</button>
+                {!isMobile && spirits.length > 0 && <button onClick={exportSpirits} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
+                <button onClick={() => router.push('/foh/inventory/database')} style={{ background: '#333', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: '600', cursor: 'pointer' }}>Edit in Inventory →</button>
               </div>
             </div>
 
-            {isMobile && (
+            {isMobile && spirits.length > 0 && (
               <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-                <button onClick={downloadSpiritsTemplate} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Template</button>
-                {spirits.length > 0 && <button onClick={exportSpirits} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>}
-                <label style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', textAlign: 'center' }}>↑ Import<input type="file" accept=".csv" onChange={handleSpiritsImport} style={{ display: 'none' }} /></label>
+                <button onClick={exportSpirits} style={{ flex: 1, background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '8px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>↓ Export</button>
               </div>
             )}
-
-            {spiritImportPreview && (
-              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '16px', marginBottom: '16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '12px' }}>
-                  <div>
-                    <div style={{ fontSize: '14px', fontWeight: '500', color: '#000' }}>Import Preview</div>
-                    <div style={{ fontSize: '12px', color: '#aaa', marginTop: '2px' }}>{spiritImportPreview.filter(r => r.valid).length} valid · {spiritImportPreview.filter(r => r.valid && !spirits.map(s => s.name.toLowerCase()).includes(r.name.toLowerCase())).length} new</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button onClick={() => setSpiritImportPreview(null)} style={{ background: '#fff', color: '#555', border: '1px solid #e8e8e8', padding: '7px 12px', borderRadius: '8px', fontSize: '12px', cursor: 'pointer' }}>Cancel</button>
-                    <button onClick={confirmSpiritsImport} disabled={importingSpirits} style={{ background: importingSpirits ? '#ccc' : '#F5B800', color: '#000', border: 'none', padding: '7px 16px', borderRadius: '8px', fontSize: '13px', fontWeight: '700', cursor: importingSpirits ? 'not-allowed' : 'pointer' }}>{importingSpirits ? 'Importing...' : 'Confirm'}</button>
-                  </div>
-                </div>
-                {isMobile ? (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {spiritImportPreview.map((r, i) => {
-                      const exists = spirits.map(s => s.name.toLowerCase()).includes(r.name.toLowerCase())
-                      return (
-                        <div key={i} style={{ background: '#fafafa', borderRadius: '8px', padding: '10px 12px', border: '1px solid #f0f0f0' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                            <div style={{ fontSize: '13px', fontWeight: '500', color: '#000' }}>{r.name}</div>
-                            <div style={{ fontSize: '11px', color: !r.valid ? '#E24B4A' : exists ? '#aaa' : '#3B6D11', fontWeight: '500' }}>{!r.valid ? 'Invalid' : exists ? 'Exists' : '✓ New'}</div>
-                          </div>
-                          <div style={{ fontSize: '11px', color: '#aaa' }}>{r.category || '--'} · {r.bottle_size_oz} oz · {r.bottle_cost ? fmt(r.bottle_cost) : '--'}</div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                ) : (
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
-                    <thead><tr>{['Name', 'Category', 'Size (oz)', 'Cost', 'Distributor', 'Status'].map((h, i) => <th key={i} style={{ textAlign: 'left', fontSize: '10px', color: '#aaa', textTransform: 'uppercase', padding: '6px 10px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>)}</tr></thead>
-                    <tbody>
-                      {spiritImportPreview.map((r, i) => {
-                        const exists = spirits.map(s => s.name.toLowerCase()).includes(r.name.toLowerCase())
-                        return (
-                          <tr key={i} style={{ borderBottom: '1px solid #f8f8f8' }}>
-                            <td style={{ padding: '7px 10px', fontWeight: '500', color: '#000' }}>{r.name}</td>
-                            <td style={{ padding: '7px 10px', color: '#666' }}>{r.category || '--'}</td>
-                            <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_size_oz || '--'}</td>
-                            <td style={{ padding: '7px 10px', color: '#666' }}>{r.bottle_cost ? fmt(r.bottle_cost) : '--'}</td>
-                            <td style={{ padding: '7px 10px', color: '#666' }}>{r.distributor || '--'}</td>
-                            <td style={{ padding: '7px 10px' }}>{!r.valid ? <span style={{ color: '#E24B4A', fontSize: '11px' }}>Missing size/cost</span> : exists ? <span style={{ color: '#aaa', fontSize: '11px' }}>Exists</span> : <span style={{ color: '#3B6D11', fontSize: '11px' }}>✓ New</span>}</td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
-
-            {showSpiritForm && <SpiritForm form={spiritForm} setForm={setSpiritForm} saving={saving} isMobile={isMobile} editingId={editingSpiritId} onSave={saveSpiritForm} onCancel={() => setShowSpiritForm(false)} />}
 
             {spirits.length === 0 ? (
-              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>No spirits yet.</div>
+              <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', padding: '48px', textAlign: 'center', color: '#ccc', fontSize: '14px' }}>No items yet. Add items in Inventory.</div>
             ) : isMobile ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 {spirits.map(s => (
@@ -565,7 +442,6 @@ export default function COGS() {
                         <div style={{ fontSize: '14px', fontWeight: '500', color: '#000', marginBottom: '2px' }}>{s.name}</div>
                         <div style={{ fontSize: '11px', color: '#aaa' }}>{s.category || '--'}{s.distributor ? ` · ${s.distributor}` : ''}</div>
                       </div>
-                      <button onClick={() => { setSpiritForm({ name: s.name, category: s.category || '', bottle_size_oz: s.bottle_size_oz, bottle_cost: s.bottle_cost, distributor: s.distributor || '', notes: s.notes || '' }); setEditingSpiritId(s.id); setShowSpiritForm(true) }} style={{ background: '#333', border: 'none', color: '#fff', padding: '6px 12px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}>Edit</button>
                     </div>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: '8px' }}>
                       <div><div style={{ fontSize: '10px', color: '#aaa', marginBottom: '2px', textTransform: 'uppercase' }}>Size</div><div style={{ fontSize: '13px', fontWeight: '500', color: '#555' }}>{s.bottle_size_oz} oz</div></div>
@@ -578,7 +454,7 @@ export default function COGS() {
             ) : (
               <div style={{ background: '#fff', border: '1px solid #e8e8e8', borderRadius: '12px', overflow: 'hidden' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                  <thead><tr>{['Item / Spirit', 'Category', 'Size (oz)', 'Bottle Cost', 'Cost/oz', 'Cost/¼oz', 'Distributor', ''].map((h, i) => <th key={i} style={{ textAlign: i > 1 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>)}</tr></thead>
+                  <thead><tr>{['Item / Spirit', 'Category', 'Size (oz)', 'Bottle Cost', 'Cost/oz', 'Cost/¼oz', 'Distributor'].map((h, i) => <th key={i} style={{ textAlign: i > 1 ? 'right' : 'left', fontSize: '11px', color: '#aaa', textTransform: 'uppercase', letterSpacing: '.4px', padding: '10px 12px', borderBottom: '1px solid #f0f0f0', background: '#fafafa' }}>{h}</th>)}</tr></thead>
                   <tbody>
                     {spirits.map(s => (
                       <tr key={s.id} style={{ borderBottom: '1px solid #f5f5f5' }}>
@@ -589,7 +465,6 @@ export default function COGS() {
                         <td style={{ padding: '10px 12px', textAlign: 'right', color: '#555', fontSize: '12px' }}>{fmt(costOz(s))}</td>
                         <td style={{ padding: '10px 12px', textAlign: 'right', color: '#F5B800', fontWeight: '600', fontSize: '12px' }}>{fmt(costOz(s) / 4)}</td>
                         <td style={{ padding: '10px 12px', color: '#aaa', fontSize: '12px' }}>{s.distributor || '--'}</td>
-                        <td style={{ padding: '10px 12px', textAlign: 'right' }}><button onClick={() => { setSpiritForm({ name: s.name, category: s.category || '', bottle_size_oz: s.bottle_size_oz, bottle_cost: s.bottle_cost, distributor: s.distributor || '', notes: s.notes || '' }); setEditingSpiritId(s.id); setShowSpiritForm(true) }} style={{ background: '#333', border: 'none', color: '#fff', padding: '4px 10px', borderRadius: '6px', fontSize: '11px', cursor: 'pointer' }}>Edit</button></td>
                       </tr>
                     ))}
                   </tbody>
