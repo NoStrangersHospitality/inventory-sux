@@ -271,11 +271,42 @@ function BOHOrder() {
     }
   }
 
+  // Inserts the NEW lines first and only then removes the previous ones, so a failed insert can never
+  // leave an order without lines. oldLineIds is null for a brand-new order, otherwise the ids of the
+  // order's existing lines. Returns { ok, inserted }. Keep identical in FOH and BOH.
+  const replaceOrderLines = async (lines, oldLineIds) => {
+    // Never replace an existing order's lines with an empty set (that is how orders used to lose their lines).
+    if (lines.length === 0 && oldLineIds && oldLineIds.length > 0) {
+      console.error('replaceOrderLines: refusing to replace ' + oldLineIds.length + ' existing line(s) with nothing')
+      return { ok: false, inserted: [] }
+    }
+    let inserted = []
+    if (lines.length > 0) {
+      const { data, error } = await supabase.from('order_lines').insert(lines).select()
+      inserted = data || []
+      if (error || inserted.length !== lines.length) {
+        console.error('order_lines insert error (rows returned: ' + inserted.length + ' of ' + lines.length + '):', error)
+        if (inserted.length > 0) await supabase.from('order_lines').delete().in('id', inserted.map(l => l.id))
+        return { ok: false, inserted: [] }
+      }
+    }
+    if (oldLineIds && oldLineIds.length > 0) {
+      const { error: deleteError } = await supabase.from('order_lines').delete().in('id', oldLineIds)
+      if (deleteError) {
+        console.error('order_lines cleanup error — rolling back new lines:', deleteError)
+        if (inserted.length > 0) await supabase.from('order_lines').delete().in('id', inserted.map(l => l.id))
+        return { ok: false, inserted: [] }
+      }
+    }
+    return { ok: true, inserted }
+  }
+
   const saveDraft = async () => {
     setSaving(true)
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder
+    let oldLineIds = null
 
     if (!order) {
       const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
@@ -291,8 +322,14 @@ function BOHOrder() {
       order = newOrder
       setDraftOrder(order)
     } else {
-      await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
-      await supabase.from('order_lines').delete().eq('order_id', order.id)
+      const { data: oldLines, error: oldLinesError } = await supabase.from('order_lines').select('id').eq('order_id', order.id)
+      if (oldLinesError) {
+        console.error('saveDraft old lines read error:', oldLinesError)
+        setSaving(false)
+        alert('Failed to save. Nothing was changed — please try again.')
+        return
+      }
+      oldLineIds = (oldLines || []).map(l => l.id)
     }
 
     const lines = []
@@ -307,8 +344,17 @@ function BOHOrder() {
       })
     })
 
-    const { data: insertedLines, error: linesError } = await supabase.from('order_lines').insert(lines).select()
-    if (linesError) console.error('saveDraft lines error:', linesError)
+    const { ok, inserted: insertedLines } = await replaceOrderLines(lines, oldLineIds)
+    if (!ok) {
+      if (!oldLineIds) { await supabase.from('orders').delete().eq('id', order.id); setDraftOrder(null) }
+      setSaving(false)
+      alert('Failed to save the order lines. Your previous draft was left as it was — please try again.')
+      return
+    }
+    if (oldLineIds) {
+      const { error: statusError } = await supabase.from('orders').update({ status: 'draft' }).eq('id', order.id)
+      if (statusError) console.error('saveDraft status update error:', statusError)
+    }
 
     const updatedRows = { ...orderRows }
     insertedLines?.forEach(line => {
@@ -447,15 +493,28 @@ function BOHOrder() {
     const { data: { session } } = await supabase.auth.getSession()
     const ownerIdToUse = ownerId || session.user.id
     let order = draftOrder || readyOrder
+    let oldLineIds = null
     if (!order) {
-      const { data: newOrder } = await supabase.from('orders').insert({
+      const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
         user_id: ownerIdToUse, status: 'ready', area: 'boh',
         receiving_status: 'pending', created_at: new Date().toISOString()
       }).select().single()
+      if (orderError || !newOrder) {
+        console.error('markAsReady order insert error:', orderError)
+        setSaving(false)
+        alert('Failed to save the order. Nothing was changed — please try again.')
+        return
+      }
       order = newOrder
     } else {
-      await supabase.from('orders').update({ status: 'ready' }).eq('id', order.id)
-      await supabase.from('order_lines').delete().eq('order_id', order.id)
+      const { data: oldLines, error: oldLinesError } = await supabase.from('order_lines').select('id').eq('order_id', order.id)
+      if (oldLinesError) {
+        console.error('markAsReady old lines read error:', oldLinesError)
+        setSaving(false)
+        alert('Failed to save. Nothing was changed — please try again.')
+        return
+      }
+      oldLineIds = (oldLines || []).map(l => l.id)
     }
     const lines = []
     Object.keys(recapRows).forEach(vn => {
@@ -468,7 +527,17 @@ function BOHOrder() {
         })
       })
     })
-    await supabase.from('order_lines').insert(lines)
+    const { ok } = await replaceOrderLines(lines, oldLineIds)
+    if (!ok) {
+      if (!oldLineIds) await supabase.from('orders').delete().eq('id', order.id)
+      setSaving(false)
+      alert('Failed to save the order lines. Your previous order was left as it was — please try again.')
+      return
+    }
+    if (oldLineIds) {
+      const { error: statusError } = await supabase.from('orders').update({ status: 'ready' }).eq('id', order.id)
+      if (statusError) console.error('markAsReady status update error:', statusError)
+    }
     setReadyOrder(order)
     setSaving(false)
     router.push('/boh/ordering')
@@ -485,15 +554,28 @@ function BOHOrder() {
     const orderDate = new Date().toLocaleDateString()
 
     let order = draftOrder || readyOrder
+    let oldLineIds = null
     if (!order) {
-      const { data: newOrder } = await supabase.from('orders').insert({
+      const { data: newOrder, error: orderError } = await supabase.from('orders').insert({
         user_id: ownerIdToUse, status: 'submitted', area: 'boh',
         receiving_status: 'pending', submitted_at: new Date().toISOString()
       }).select().single()
+      if (orderError || !newOrder) {
+        console.error('submitOrder order insert error:', orderError)
+        setSubmitting(false)
+        alert('Failed to save the order. Nothing was sent — please try again.')
+        return
+      }
       order = newOrder
     } else {
-      await supabase.from('orders').update({ status: 'submitted', submitted_at: new Date().toISOString() }).eq('id', order.id)
-      await supabase.from('order_lines').delete().eq('order_id', order.id)
+      const { data: oldLines, error: oldLinesError } = await supabase.from('order_lines').select('id').eq('order_id', order.id)
+      if (oldLinesError) {
+        console.error('submitOrder old lines read error:', oldLinesError)
+        setSubmitting(false)
+        alert('Failed to save. Nothing was changed — please try again.')
+        return
+      }
+      oldLineIds = (oldLines || []).map(l => l.id)
     }
 
     const lines = []
@@ -508,8 +590,17 @@ function BOHOrder() {
       })
     })
 
-    const { error: linesError } = await supabase.from('order_lines').insert(lines)
-    if (linesError) console.error('Order lines insert error:', linesError)
+    const { ok } = await replaceOrderLines(lines, oldLineIds)
+    if (!ok) {
+      if (!oldLineIds) await supabase.from('orders').delete().eq('id', order.id)
+      setSubmitting(false)
+      alert('Failed to save the order, so it was NOT sent to your distributors. Your previous order was left as it was — please try again.')
+      return
+    }
+    if (oldLineIds) {
+      const { error: statusError } = await supabase.from('orders').update({ status: 'submitted', submitted_at: new Date().toISOString() }).eq('id', order.id)
+      if (statusError) console.error('submitOrder status update error:', statusError)
+    }
 
     const vendorGroups = {}
     lines.forEach(line => {
